@@ -17,10 +17,7 @@ from torch.utils.data import DataLoader
 # training pipeline. no need to change
 from training import get_basic_grad_fn, basic_validate
 from training import BasicPipeline, BasicTrainer, MultiTaskPipeline, MultiTaskTrainer
-
-
-from model.copy_summ import CopySumm
-from model.copy_summ_multiencoder import CopySummGAT, CopySummParagraph
+from model.multibart import multiBartGAT
 from model.util import sequence_loss
 
 
@@ -36,7 +33,7 @@ from training import multitask_validate
 
 from utils import PAD, UNK, START, END
 from utils import make_vocab, make_embedding
-from transformers import BartTokenizer
+from transformers import BartTokenizer, BartConfig
 import pickle
 
 # NOTE: bucket size too large may sacrifice randomness,
@@ -134,41 +131,28 @@ def configure_net(vocab_size, emb_dim,
 
     return net, net_args
 
-def configure_net_gat(vocab_size, emb_dim,
-                  n_hidden, bidirectional, n_layer, load_from=None, gat_args={},
-                  adj_type='no_edge', mask_type='none',
-                  feed_gold=False, graph_layer_num=1, feature=[], subgraph=False, hierarchical_attn=False,
-                      bart=False, bart_length=512
-                      ):
-    net_args = {}
-    net_args['vocab_size']    = vocab_size
-    net_args['emb_dim']       = emb_dim
-    net_args['side_dim'] = n_hidden
-    net_args['n_hidden']      = n_hidden
-    net_args['bidirectional'] = bidirectional
-    net_args['n_layer']       = n_layer
-    net_args['gat_args'] = gat_args
-    net_args['feed_gold'] = feed_gold
-    net_args['mask_type'] = mask_type
-    net_args['adj_type'] = adj_type
-    net_args['graph_layer_num'] = graph_layer_num
-    net_args['feature_banks'] = feature
-    net_args['bart'] = bart
-    net_args['bart_length'] = bart_length
-    if subgraph:
-        net_args['hierarchical_attn'] = hierarchical_attn
-
-
-
-    if subgraph:
-        net = CopySummParagraph(**net_args)
-    else:
-        net = CopySummGAT(**net_args)
+def configure_bart_gat(vocab_size, emb_dim, n_encoder, n_decoder, drop_encoder, drop_decoder,
+                  load_from=None, gat_args={}, max_art=2048,
+                  static_pos_emb=False):
+    
+    net_args = BartConfig(
+        vocab_size=vocab_size,
+        d_model=emb_dim,
+        encoder_layers=n_encoder,
+        decoder_layers=n_decoder,
+        encoder_layerdrop=drop_encoder,
+        decoder_layerdrop=drop_decoder,
+        static_position_embedding=static_pos_emb,
+        max_position_embeddings=max_art,
+    )
+    
+    net = multiBartGAT(net_args, gat_args)
+    
     if load_from is not None:
         abs_ckpt = load_best_ckpt(load_from)
         net.load_state_dict(abs_ckpt)
 
-    return net, net_args
+    return net, net_args, gat_args
 
 
 
@@ -239,34 +223,6 @@ def configure_training_multitask(opt, lr, clip_grad, lr_decay, batch_size, mask_
     return criterion, train_params
 
 
-
-def build_batchers(word2id, cuda, debug):
-
-    prepro = prepro_fn(args.max_art, args.max_abs)
-    def sort_key(sample):
-        src, target = sample
-        return (len(target), len(src))
-    batchify = compose(
-        batchify_fn_copy(PAD, START, END, cuda=cuda),
-        convert_batch_copy(UNK, word2id)
-    )
-    train_loader = DataLoader(
-        MatchDataset_all2all('train'), batch_size=BUCKET_SIZE,
-        shuffle=not debug,
-        num_workers=4 if cuda and not debug else 0,
-        collate_fn=coll_fn
-    )
-    train_batcher = BucketedGenerater(train_loader, prepro, sort_key, batchify,
-                                      single_run=False, fork=not debug)
-    val_loader = DataLoader(
-        MatchDataset_all2all('val'), batch_size=BUCKET_SIZE,
-        shuffle=False, num_workers=4 if cuda and not debug else 0,
-        collate_fn=coll_fn
-    )
-    val_batcher = BucketedGenerater(val_loader, prepro, sort_key, batchify,
-                                    single_run=True, fork=not debug)
-    return train_batcher, val_batcher
-
 def build_batchers_bart(cuda, debug, bart_model):
     tokenizer = BartTokenizer.from_pretrained(bart_model)
     #tokenizer = BertTokenizer.from_pretrained(bart_model)
@@ -297,63 +253,18 @@ def build_batchers_bart(cuda, debug, bart_model):
 
     return train_batcher, val_batcher, tokenizer.encoder
 
-def build_batchers_gat(word2id, cuda, debug, gold_key, adj_type,
-                       mask_type, subgraph, num_worker=4):
-    print('adj_type:', adj_type)
-    print('mask_type:', mask_type)
-    docgraph = not subgraph
-    prepro = prepro_fn_gat(args.max_art, args.max_abs, key=gold_key, adj_type=adj_type, docgraph=docgraph)
-    if not subgraph:
-        key = 'nodes_pruned2'
-        _coll_fn = coll_fn_gat(max_node_num=200)
-    else:
-        key = 'nodes'
-        _coll_fn = coll_fn_gat(max_node_num=400)
-    def sort_key(sample):
-        src, target = sample[0], sample[1]
-        return (len(target), len(src))
-
-    batchify = compose(
-        batchify_fn_gat(PAD, START, END, cuda=cuda,
-                     adj_type=adj_type, mask_type=mask_type, docgraph=docgraph),
-        convert_batch_gat(UNK, word2id)
-    )
-
-    train_loader = DataLoader(
-        MatchDataset_graph('train', key=key, subgraph=subgraph), batch_size=BUCKET_SIZE,
-        shuffle=not debug,
-        num_workers=num_worker if cuda and not debug else 0,
-        collate_fn=_coll_fn
-    )
-    train_batcher = BucketedGenerater(train_loader, prepro, sort_key, batchify,
-                                      single_run=False, fork=not debug)
-    val_loader = DataLoader(
-        MatchDataset_graph('val', key=key, subgraph=subgraph), batch_size=BUCKET_SIZE,
-        shuffle=False, num_workers=num_worker if cuda and not debug else 0,
-        collate_fn=_coll_fn
-    )
-    val_batcher = BucketedGenerater(val_loader, prepro, sort_key, batchify,
-                                    single_run=True, fork=not debug)
-
-    return train_batcher, val_batcher
-
 def build_batchers_gat_bart(cuda, debug, gold_key, adj_type,
-                       mask_type, subgraph, num_worker=4, bart_model='bart-base'):
+                       mask_type, num_worker=4, bart_model='bart-base'):
     print('adj_type:', adj_type)
     print('mask_type:', mask_type)
-    docgraph = not subgraph
     tokenizer = BartTokenizer.from_pretrained(bart_model)
 
     with open(os.path.join(DATA_DIR, 'bart-base-align.pkl'), 'rb') as f:
         align = pickle.load(f)
 
-    prepro = prepro_fn_gat_bart(tokenizer, align, args.max_art, args.max_abs, key=gold_key, adj_type=adj_type, docgraph=docgraph)
-    if not subgraph:
-        key = 'nodes_pruned2'
-        _coll_fn = coll_fn_gat(max_node_num=200)
-    else:
-        key = 'nodes'
-        _coll_fn = coll_fn_gat(max_node_num=400)
+    prepro = prepro_fn_gat_bart(tokenizer, align, args.max_art, args.max_abs, key=gold_key, adj_type=adj_type, docgraph=False)
+    key = 'nodes'
+    _coll_fn = coll_fn_gat(max_node_num=400)
     def sort_key(sample):
         src, target = sample[0], sample[1]
         return (len(target), len(src))
@@ -383,61 +294,31 @@ def build_batchers_gat_bart(cuda, debug, gold_key, adj_type,
     return train_batcher, val_batcher, tokenizer.encoder
 
 def main(args):
+    import logging
+    logging.basicConfig(level=logging.ERROR)
+    
     # create data batcher, vocabulary
-    # batcher
-    if args.bart:
-        import logging
-        logging.basicConfig(level=logging.ERROR)
 
-    if not args.bart:
-        with open(join(DATA_DIR, 'vocab_cnt.pkl'), 'rb') as f:
-            wc = pkl.load(f)
-        word2id = make_vocab(wc, args.vsize)
-    if not args.gat:
-        if args.bart:
-            train_batcher, val_batcher, word2id = build_batchers_bart(args.cuda, args.debug, args.bartmodel)
-        else:
-            train_batcher, val_batcher = build_batchers(word2id,
-                                                args.cuda, args.debug)
-    else:
-        if args.bart:
-            train_batcher, val_batcher, word2id = build_batchers_gat_bart(
+    # batcher
+    train_batcher, val_batcher, word2id = build_batchers_gat_bart(
                                                             args.cuda, args.debug, args.gold_key, args.adj_type,
                                                             args.mask_type, args.topic_flow_model,
                                                             num_worker=args.num_worker, bart_model=args.bartmodel)
-        else:
-            train_batcher, val_batcher = build_batchers_gat(word2id,
-                                                    args.cuda, args.debug, args.gold_key, args.adj_type,
-                                                        args.mask_type, args.topic_flow_model, num_worker=args.num_worker)
-
 
     # make net
-    if args.gat:
-        _args = {}
-        _args['rtoks'] = 1
-        _args['graph_hsz'] = args.n_hidden
-        _args['blockdrop'] = 0.1
-        _args['sparse'] = False
-        _args['graph_model'] = 'transformer'
-        _args['adj_type'] = args.adj_type
+    _args = {}
+    _args['rtoks'] = 1
+    _args['graph_hsz'] = args.n_hidden
+    _args['blockdrop'] = 0.1
+    _args['sparse'] = False
+    _args['graph_model'] = 'transformer'
+    _args['adj_type'] = args.adj_type
+    _args['mask_type'] = args.mask_type
+    _args['node_freq'] = args.node_freq
 
-
-        net, net_args = configure_net_gat(len(word2id), args.emb_dim,
-                                      args.n_hidden, args.bi, args.n_layer, args.load_from, gat_args=_args,
-                  adj_type=args.adj_type, mask_type=args.mask_type,
-                  feed_gold=False, graph_layer_num=args.graph_layer,
-                  feature=args.feat, subgraph=args.topic_flow_model, hierarchical_attn=args.topic_flow_model, bart=args.bart, bart_length=args.max_art)
-    else:
-        net, net_args = configure_net(len(word2id), args.emb_dim,
-                                      args.n_hidden, args.bi, args.n_layer, args.load_from, args.bart, args.max_art)
-
-    if args.w2v:
-        assert not args.bart
-        # NOTE: the pretrained embedding having the same dimension
-        #       as args.emb_dim should already be trained
-        embedding, _ = make_embedding(
-            {i: w for w, i in word2id.items()}, args.w2v)
-        net.set_embedding(embedding)
+    net, net_args = configure_net_gat(args.vsize, args.emb_dim, args.n_encoder, args.n_decoder, 
+                                      args.drop_encoder, args.drop_decoder, args.load_from, _args, 
+                                      args.max_art, args.static_pos_emb)
 
     # configure training setting
     if 'soft' in args.mask_type and args.gat:
@@ -475,10 +356,8 @@ def main(args):
     print(net._embedding.weight.requires_grad)
 
     optimizer = optim.AdamW(net.parameters(), **train_params['optimizer'][1])
-
-
-
     #optimizer = optim.Adagrad(net.parameters(), **train_params['optimizer'][1])
+
     scheduler = ReduceLROnPlateau(optimizer, 'min', verbose=True,
                                   factor=args.decay, min_lr=0,
                                   patience=args.lr_p)
@@ -488,6 +367,7 @@ def main(args):
     #                          criterion, optimizer, grad_fn)
     # trainer = BasicTrainer(pipeline, args.path,
     #                        args.ckpt_freq, args.patience, scheduler)
+    
     if 'soft' in args.mask_type and args.gat:
         pipeline = MultiTaskPipeline(meta['net'], net,
                                  train_batcher, val_batcher, args.batch, val_fn,
@@ -512,44 +392,46 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='training of the abstractor (ML)'
     )
+    # Basics
     parser.add_argument('--path', required=True, help='root of the model')
-    parser.add_argument('--key', type=str, default='extracted_combine', help='constructed sentences')
-
-
+    
+    # parser.add_argument('--key', type=str, default='extracted_combine', help='constructed sentences')
+    # Settings that align with BART
     parser.add_argument('--vsize', type=int, action='store', default=50000,
-                        help='vocabulary size')
-    parser.add_argument('--emb_dim', type=int, action='store', default=128,
-                        help='the dimension of word embedding')
-    parser.add_argument('--w2v', action='store',
-                        help='use pretrained word2vec embedding')
-    parser.add_argument('--n_hidden', type=int, action='store', default=256,
-                        help='the number of hidden units of LSTM')
-    parser.add_argument('--n_layer', type=int, action='store', default=1,
-                        help='the number of layers of LSTM')
+                        help='vocabulary size') # BartConfig.vocab_size
+    parser.add_argument('--emb_dim', type=int, action='store', default=1024,
+                        help='the dimension of word embedding') # BartConfig.d_model
+    parser.add_argument('--n_encoder', type=int, action='store', default=12,
+                        help='number of encoder layer') # BartConfig.encoder_layers
+    parser.add_argument('--n_decoder', type=int, action='store', default=12,
+                        help='number of decoder layer') # BartConfig.decoder_layers
+    parser.add_argument('--drop_encoder', type=int, action='store', default=0.0,
+                        help='dropout rate of encoder between layers') # BartConfig.decoder_layerdrop
+    parser.add_argument('--drop_decoder', type=int, action='store', default=0.0,
+                        help='dropout rate of decoder between layers') # BartConfig.decoder_layerdrop
+    parser.add_argument('--max_art', type=int, action='store', default=2048,
+                        help='maximun words in a single article sentence') # BartConfig.max_position_embeddings
+    parser.add_argument('--max_abs', type=int, action='store', default=256,
+                        help='maximun words in a single abstract sentence') # BartConfig.max_position_embeddings
+    parser.add_argument('--static_pos_emb', type=int, action='store', default=False,
+                        help='use of sinosuidal position embeddings or learned ones') # BartConfig.static_position_embeddings
+    
+    ## Can add other settings based on BartConfig class if needed
 
-    parser.add_argument('--docgraph', action='store_true', help='uses gat encoder')
-    parser.add_argument('--paragraph', action='store_true', help='encode topic flow')
+    # GAT Configs
+    parser.add_argument('--adj_type', action='store', default='edge_as_node', type=str,
+                        help='concat_triple, edge_up, edge_down, no_edge, edge_as_node')
     parser.add_argument('--mask_type', action='store', default='soft', type=str,
                         help='none, encoder, soft')
-    parser.add_argument('--graph_layer', type=int, default=1, help='graph layer number')
+    parser.add_argument('--node_freq', action='store_true', default=False)
+
+    # data preprocessing
     parser.add_argument('--adj_type', action='store', default='edge_as_node', type=str,
                         help='concat_triple, edge_up, edge_down, no_edge, edge_as_node')
     parser.add_argument('--gold_key', action='store', default='summary_worthy', type=str,
                         help='attention type')
-    parser.add_argument('--feat', action='append', default=['node_freq'])
-    parser.add_argument('--bart', action='store_true', help='use bart!')
-    parser.add_argument('--bartmodel', action='store', type=str, default='bart-base',
-                        help='bart-base')
 
 
-
-
-
-    # length limit
-    parser.add_argument('--max_art', type=int, action='store', default=1024,
-                        help='maximun words in a single article sentence')
-    parser.add_argument('--max_abs', type=int, action='store', default=150,
-                        help='maximun words in a single abstract sentence')
     # training options
     parser.add_argument('--lr', type=float, action='store', default=1e-3,
                         help='learning rate')
@@ -575,20 +457,11 @@ if __name__ == '__main__':
     parser.add_argument('--no-cuda', action='store_true',
                         help='disable GPU training')
     parser.add_argument('--load_from', type=str, default=None,
-                        help='disable GPU training')
-    parser.add_argument('--gpu_id', type=int, default=0, help='gpu id')
+                        help='loading from file')
+    parser.add_argument('--gpu_id', type=int, default=0, help='gpu id if only 1 gpu is used')
     args = parser.parse_args()
     if args.debug:
         BUCKET_SIZE = 64
-    args.bi = True
-    if args.docgraph or args.paragraph:
-        args.gat = True
-    else:
-        args.gat = False
-    if args.paragraph:
-        args.topic_flow_model = True
-    else:
-        args.topic_flow_model = False
 
     args.cuda = torch.cuda.is_available() and not args.no_cuda
     if args.cuda:

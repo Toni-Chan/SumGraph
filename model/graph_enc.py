@@ -284,71 +284,6 @@ class graph_encode(nn.Module):
                     print('gent:', gent)
         return None, glob ,(gents, emask)
 
-# class gat_encode(nn.Module):
-#     def __init__(self, args):
-#         super().__init__()
-#         self.args = args
-#         rtoks = args.get('rtoks', 1)
-#         hidden_size = args.get('graph_hsz', 300)
-#         blockdrop = args.get('blockdrop', 0.1)
-#         prop = args.get('prop', 1)
-#         sparse = args.get('sparse', False)
-#         model = args.get('graph_model', 'transformer')
-#         adj_type = args.get('adj_type', 'concat_triple')
-#         self._adj_type = adj_type
-#
-#         if self._adj_type == 'concat_triple':
-#             self._rproj = nn.Linear(hidden_size*3, hidden_size)
-#             self._rrelu = nn.LeakyReLU()
-#         self._rtrans = nn.Linear(hidden_size, hidden_size)
-#
-#         self.gat = Block(args)
-#         # if model == "gat":
-#         #     self.gat = nn.ModuleList([MultiHeadAttention(hidden_size, hidden_size, hidden_size, h=4, dropout_p=blockdrop) for _ in range(prop)])
-#         # else:
-#         #     self.gat = nn.ModuleList([Block(args) for _ in range(prop)])
-#
-#         self._pad_entity = nn.Parameter(torch.Tensor(1, hidden_size))
-#         nn.init.uniform_(self._pad_entity)
-#
-#
-#         self.prop = prop
-#         self.sparse = sparse
-#         self.model = model
-#
-#     def pad(self,tensor,length):
-#         return torch.cat([tensor, tensor.new(length - tensor.size(0), *tensor.size()[1:]).fill_(0)])
-#
-#     def forward(self, adjs, triples, nodes, node_num, relations):
-#         # input triples B*(R*3d)  R*d
-#         triple_outs = []
-#         for _i, adj in enumerate(adjs):
-#             if self._adj_type == 'concat_triple':
-#                 triple = self._rrelu(self._rproj(triples[_i])) # R * d
-#                 R = triple.size(0)
-#                 N = node_num[_i]
-#                 ngraph = nodes[_i, :N, :] # N * d
-#                 mask = (adj == 0) # N * R
-#                 # triple_out = self.gat(ngraph, triple, mask)
-#                 triple_out = triple
-#             else:
-#                 N = node_num[_i]
-#                 ngraph = nodes[_i, :N, :]  # N * d
-#                 mask = (adj == 0)  # N * N
-#                 triple_out = self.gat(ngraph, ngraph, mask)
-#             triple_outs.append(triple_out)
-#         max_n= max(node_num)
-#         nodes = torch.stack(
-#                 [torch.cat([s, torch.zeros(max_n - n, s.size(1)).to(s.device)], dim=0)
-#                  if n != max_n
-#                  else s
-#                  for s, n in zip(triple_outs, node_num)],
-#                 dim=0
-#             )
-#         # relations = self._rtrans(relations)
-#
-#         return nodes, relations
-
 class gat_encode(nn.Module):
     def __init__(self, args):
         super().__init__()
@@ -425,7 +360,6 @@ class gat_encode(nn.Module):
 
         return nodes, relations
 
-
 class node_mask(nn.Module):
     def __init__(self, mask_type, emb_dim=128, feat_dim=128):
         super().__init__()
@@ -491,98 +425,6 @@ class node_mask(nn.Module):
         else:
             raise Exception('Not Implemented yet')
 
-
-# class graph_sent_encode(nn.Module):
-#     def __init__(self,args):
-#         super().__init__()
-#         self.args = args
-#         rtoks = args.get('rtoks', 1)
-#         hidden_size = args.get('graph_hsz', 300)
-#         blockdrop = args.get('blockdrop', 0.1)
-#         prop = args.get('prop', 6)
-#         sparse = args.get('sparse', False)
-#         model = args.get('graph_model', 'transformer')
-#         self._entity = args.get('entity', False)
-#
-#         self.renc = nn.Embedding(rtoks, hidden_size)
-#         nn.init.xavier_normal_(self.renc.weight)
-#
-#         if model == "gat":
-#             self.gat = nn.ModuleList([MultiHeadAttention(hidden_size, hidden_size, hidden_size, h=4, dropout_p=blockdrop) for _ in range(prop)])
-#         else:
-#             self.gat = nn.ModuleList([Block(args) for _ in range(prop)])
-#
-#         self._init_dec = nn.Parameter(torch.Tensor(1, hidden_size))
-#         nn.init.uniform_(self._init_dec)
-#
-#         if self._entity:
-#             self._pad_entity = nn.Parameter(torch.Tensor(1, hidden_size))
-#             nn.init.uniform_(self._pad_entity)
-#
-#
-#         self.prop = prop
-#         self.sparse = sparse
-#         self.model = model
-#         self.hidden_size = hidden_size
-#
-#     def pad(self,tensor,length):
-#         return torch.cat([tensor, tensor.new(length - tensor.size(0), *tensor.size()[1:]).fill_(0)])
-#
-#     def forward(self,adjs,rels,ents):
-#
-#         sents, sentlens, vents, entlens = ents
-#         vrels = [self.renc(x) for x in rels]
-#
-#         glob = []
-#         graphs = []
-#         for i, adj in enumerate(adjs):
-#             if self._entity:
-#                 vgraph = torch.cat((sents[i][:sentlens[i]], self._init_dec, self._pad_entity, vents[i][:entlens[i]], vrels[i]),0)
-#             else:
-#                 vgraph = torch.cat((sents[i][:sentlens[i]], self._init_dec, vrels[i]), 0)
-#             N = vgraph.size(0)
-#             if self.sparse:
-#                 lens = [len(x) for x in adj]
-#                 m = max(lens)
-#                 mask = torch.arange(0,m).unsqueeze(0).repeat(len(lens),1).long()
-#                 mask = (mask <= torch.LongTensor(lens).unsqueeze(1)).cuda()
-#                 mask = (mask == 0).unsqueeze(1)
-#             else:
-#                 mask = (adj == 0).unsqueeze(1)
-#             for j in range(self.prop):
-#                 if self.sparse:
-#                     ngraph = [vgraph[k] for k in adj]
-#                     ngraph = [self.pad(x,m) for x in ngraph]
-#                     ngraph = torch.stack(ngraph,0)
-#                     #print(ngraph.size(),vgraph.size(),mask.size())
-#                     vgraph = self.gat[j](vgraph.unsqueeze(1),ngraph,mask)
-#                 else:
-#                     ngraph = torch.tensor(vgraph.repeat(N,1).view(N,N,-1),requires_grad=False)
-#                     vgraph = self.gat[j](vgraph.unsqueeze(1),ngraph,mask)
-#                     if math.isnan(vgraph.sum()):
-#                         print('vgraph:', vgraph)
-#                         print('mask:', mask)
-#                         print('adj', adj)
-#                         print(j, i)
-#                     if self.model == 'gat':
-#                         vgraph = vgraph.squeeze(1)
-#                         vgraph = self.gatact(vgraph)
-#             graphs.append(vgraph)
-#             glob.append(vgraph[entlens[i]])
-#         elens = [x.size(0) for x in graphs]
-#         gents = [self.pad(x,max(elens)) for x in graphs]
-#         gents = torch.stack(gents,0)
-#         elens = torch.LongTensor(elens)
-#         emask = torch.arange(0,gents.size(1)).unsqueeze(0).repeat(gents.size(0),1).long()
-#         emask = (emask <= elens.unsqueeze(1)).cuda()
-#         glob = torch.stack(glob,0)
-#         if math.isnan(gents.sum()):
-#             for gent in gents:
-#                 if math.isnan(gent.sum()):
-#                     print('gent:', gent)
-#         return None, glob ,(gents, emask)
-#
-#
 class subgraph_encode(nn.Module):
     def __init__(self, args):
         super().__init__()
