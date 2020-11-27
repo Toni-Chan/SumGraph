@@ -113,24 +113,6 @@ def get_bart_align_dict(filename='preprocessing/bartalign-base.pkl'):
         bart_dict = pickle.load(f)
     return bart_dict
 
-def configure_net(vocab_size, emb_dim,
-                  n_hidden, bidirectional, n_layer, load_from=None, bart=False, max_art=800):
-    net_args = {}
-    net_args['vocab_size']    = vocab_size
-    net_args['emb_dim']       = emb_dim
-    net_args['n_hidden']      = n_hidden
-    net_args['bidirectional'] = bidirectional
-    net_args['n_layer']       = n_layer
-    net_args['bart'] = bart
-    net_args['bart_length'] = max_art
-
-    net = CopySumm(**net_args)
-    if load_from is not None:
-        abs_ckpt = load_best_ckpt(load_from)
-        net.load_state_dict(abs_ckpt)
-
-    return net, net_args
-
 def configure_bart_gat(vocab_size, emb_dim, n_encoder, n_decoder, drop_encoder, drop_decoder,
                   load_from=None, gat_args={}, max_art=2048,
                   static_pos_emb=False):
@@ -316,7 +298,7 @@ def main(args):
     _args['mask_type'] = args.mask_type
     _args['node_freq'] = args.node_freq
 
-    net, net_args = configure_net_gat(args.vsize, args.emb_dim, args.n_encoder, args.n_decoder, 
+    net, net_args = configure_bart_gat(args.vsize, args.emb_dim, args.n_encoder, args.n_decoder, 
                                       args.drop_encoder, args.drop_decoder, args.load_from, _args, 
                                       args.max_art, args.static_pos_emb)
 
@@ -367,7 +349,7 @@ def main(args):
     #                          criterion, optimizer, grad_fn)
     # trainer = BasicTrainer(pipeline, args.path,
     #                        args.ckpt_freq, args.patience, scheduler)
-    
+
     if 'soft' in args.mask_type and args.gat:
         pipeline = MultiTaskPipeline(meta['net'], net,
                                  train_batcher, val_batcher, args.batch, val_fn,
