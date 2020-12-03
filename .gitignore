@@ -1,4 +1,6 @@
 transformers-master
+
+checkpoints*
 SumGraph
 checkpoints
 model/bak

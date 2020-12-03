@@ -7,7 +7,6 @@ from os.path import join, exists
 import pickle as pkl
 
 from cytoolz import compose, concat
-
 import torch
 from torch import optim
 from torch.nn import functional as F
@@ -239,12 +238,14 @@ def build_batchers_gat_bart(cuda, debug, gold_key, adj_type,
                        mask_type, num_worker=4, bart_model='bart-base'):
     print('adj_type:', adj_type)
     print('mask_type:', mask_type)
+    subgraph = True
+    docgraph = not subgraph
     tokenizer = BartTokenizer.from_pretrained(bart_model)
 
-    with open(os.path.join(DATA_DIR, 'bart-base-align.pkl'), 'rb') as f:
+    with open(os.path.join(DATA_DIR, 'roberta-base-align.pkl'), 'rb') as f:
         align = pickle.load(f)
 
-    prepro = prepro_fn_gat_bart(tokenizer, align, args.max_art, args.max_abs, key=gold_key, adj_type=adj_type, docgraph=False)
+    prepro = prepro_fn_gat_bart(tokenizer, align, args.max_art, args.max_abs, key=gold_key, adj_type=adj_type, docgraph=docgraph)
     key = 'nodes'
     _coll_fn = coll_fn_gat(max_node_num=400)
     def sort_key(sample):
@@ -278,13 +279,14 @@ def build_batchers_gat_bart(cuda, debug, gold_key, adj_type,
 def main(args):
     import logging
     logging.basicConfig(level=logging.ERROR)
-    
+    args.gat=True
+    args.bart=True
     # create data batcher, vocabulary
 
     # batcher
     train_batcher, val_batcher, word2id = build_batchers_gat_bart(
                                                             args.cuda, args.debug, args.gold_key, args.adj_type,
-                                                            args.mask_type, args.topic_flow_model,
+                                                            args.mask_type,
                                                             num_worker=args.num_worker, bart_model=args.bartmodel)
 
     # make net
@@ -298,7 +300,7 @@ def main(args):
     _args['mask_type'] = args.mask_type
     _args['node_freq'] = args.node_freq
 
-    net, net_args = configure_bart_gat(args.vsize, args.emb_dim, args.n_encoder, args.n_decoder, 
+    net, net_args, gat_args = configure_bart_gat(args.vsize, args.emb_dim, args.n_encoder, args.n_decoder, 
                                       args.drop_encoder, args.drop_decoder, args.load_from, _args, 
                                       args.max_art, args.static_pos_emb)
 
@@ -322,8 +324,10 @@ def main(args):
     meta['net']           = 'base_abstractor'
     meta['net_args']      = net_args
     meta['traing_params'] = train_params
-    with open(join(args.path, 'meta.json'), 'w') as f:
-        json.dump(meta, f, indent=4)
+    with open(join(args.path, 'meta.json'), 'wb') as f:
+        pickle.dump(meta,f)
+#     with open(join(args.path, 'meta.json'), 'w') as f:
+#         json.dump(meta, f, indent=4)
 
     # prepare trainer
     if args.cuda:
@@ -335,7 +339,7 @@ def main(args):
     else:
         val_fn = basic_validate(net, criterion)
     grad_fn = get_basic_grad_fn(net, args.clip)
-    print(net._embedding.weight.requires_grad)
+#     print(net._embedding.weight.requires_grad)
 
     optimizer = optim.AdamW(net.parameters(), **train_params['optimizer'][1])
     #optimizer = optim.Adagrad(net.parameters(), **train_params['optimizer'][1])
@@ -379,21 +383,21 @@ if __name__ == '__main__':
     
     # parser.add_argument('--key', type=str, default='extracted_combine', help='constructed sentences')
     # Settings that align with BART
-    parser.add_argument('--vsize', type=int, action='store', default=50000,
+    parser.add_argument('--vsize', type=int, action='store', default=50265,
                         help='vocabulary size') # BartConfig.vocab_size
-    parser.add_argument('--emb_dim', type=int, action='store', default=1024,
+    parser.add_argument('--emb_dim', type=int, action='store', default=768,
                         help='the dimension of word embedding') # BartConfig.d_model
-    parser.add_argument('--n_encoder', type=int, action='store', default=12,
+    parser.add_argument('--n_encoder', type=int, action='store', default=6,
                         help='number of encoder layer') # BartConfig.encoder_layers
-    parser.add_argument('--n_decoder', type=int, action='store', default=12,
+    parser.add_argument('--n_decoder', type=int, action='store', default=6,
                         help='number of decoder layer') # BartConfig.decoder_layers
     parser.add_argument('--drop_encoder', type=int, action='store', default=0.0,
                         help='dropout rate of encoder between layers') # BartConfig.decoder_layerdrop
     parser.add_argument('--drop_decoder', type=int, action='store', default=0.0,
                         help='dropout rate of decoder between layers') # BartConfig.decoder_layerdrop
-    parser.add_argument('--max_art', type=int, action='store', default=2048,
+    parser.add_argument('--max_art', type=int, action='store', default=1024,
                         help='maximun words in a single article sentence') # BartConfig.max_position_embeddings
-    parser.add_argument('--max_abs', type=int, action='store', default=256,
+    parser.add_argument('--max_abs', type=int, action='store', default=1024,
                         help='maximun words in a single abstract sentence') # BartConfig.max_position_embeddings
     parser.add_argument('--static_pos_emb', type=int, action='store', default=False,
                         help='use of sinosuidal position embeddings or learned ones') # BartConfig.static_position_embeddings
@@ -401,15 +405,16 @@ if __name__ == '__main__':
     ## Can add other settings based on BartConfig class if needed
 
     # GAT Configs
+    parser.add_argument('--n_hidden', type=int, action='store', default=768,
+                        help='the number of hidden units')
     parser.add_argument('--adj_type', action='store', default='edge_as_node', type=str,
                         help='concat_triple, edge_up, edge_down, no_edge, edge_as_node')
+    
     parser.add_argument('--mask_type', action='store', default='soft', type=str,
                         help='none, encoder, soft')
     parser.add_argument('--node_freq', action='store_true', default=False)
 
     # data preprocessing
-    parser.add_argument('--adj_type', action='store', default='edge_as_node', type=str,
-                        help='concat_triple, edge_up, edge_down, no_edge, edge_as_node')
     parser.add_argument('--gold_key', action='store', default='summary_worthy', type=str,
                         help='attention type')
 
@@ -423,9 +428,9 @@ if __name__ == '__main__':
                         help='patience for learning rate decay')
     parser.add_argument('--clip', type=float, action='store', default=2.0,
                         help='gradient clipping')
-    parser.add_argument('--batch', type=int, action='store', default=32,
+    parser.add_argument('--batch', type=int, action='store', default=16,
                         help='the training batch size')
-    parser.add_argument('--num_worker', type=int, action='store', default=4,
+    parser.add_argument('--num_worker', type=int, action='store', default=0,
                         help='cpu num using for dataloader')
     parser.add_argument(
         '--ckpt_freq', type=int, action='store', default=9000,
@@ -441,10 +446,13 @@ if __name__ == '__main__':
     parser.add_argument('--load_from', type=str, default=None,
                         help='loading from file')
     parser.add_argument('--gpu_id', type=int, default=0, help='gpu id if only 1 gpu is used')
+    parser.add_argument('--bartmodel', action='store', default='facebook/bart-base', type=str,
+                        help='model type')
+    
     args = parser.parse_args()
     if args.debug:
         BUCKET_SIZE = 64
-
+    args.topic_flow_model = False
     args.cuda = torch.cuda.is_available() and not args.no_cuda
     if args.cuda:
         torch.cuda.set_device(args.gpu_id)
