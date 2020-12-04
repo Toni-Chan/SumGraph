@@ -9,17 +9,19 @@ from itertools import starmap
 from cytoolz import curry, concat
 
 import torch
-
+import pickle
 from utils import PAD, UNK, START, END
-from model.copy_summ import CopySumm
-from model.copy_summ_multiencoder import CopySummGAT, CopySummParagraph
+# from model.copy_summ import CopySumm
+# from model.copy_summ_multiencoder import CopySummGAT, CopySummParagraph
+from model.multibart import multiBartGAT
+
 from model.extract import ExtractSumm, PtrExtractSumm, NNSESumm, PtrExtractSummGAT, PtrExtractSummSubgraph
-from model.rl import ActorCritic, SelfCritic, SelfCriticEntity
+# from model.rl import ActorCritic, SelfCritic, SelfCriticEntity
 from data.batcher import conver2id, pad_batch_tensorize, pad_batch_tensorize_3d
 from data.data import CnnDmDataset
 from collections import defaultdict
 from data.batcher import make_adj_triple, make_adj, make_adj_edge_in
-from model.rl_ext import SelfCriticGraph
+# from model.rl_ext import SelfCriticGraph
 from data.abs_batcher import create_word_freq_in_para_feat, make_node_lists, count_max_sent
 from data.ExtractBatcher import subgraph_make_adj, subgraph_make_adj_edge_in
 from toolz.sandbox import unzip
@@ -243,16 +245,19 @@ class Abstractor(object):
 
 class BeamAbstractorGAT(object):
     def __init__(self, abs_dir, max_len=100, cuda=True, min_len=0, reverse=True, key='summary_worthy', docgraph=True):
-        abs_meta = json.load(open(join(abs_dir, 'meta.json')))
+        
+        abs_meta = pickle.load(open(join(abs_dir, 'meta.json'),'rb'))# json.load(open(join(abs_dir, 'meta.json')))
         assert abs_meta['net'] == 'base_abstractor'
         abs_args = abs_meta['net_args']
         abs_ckpt = load_best_ckpt(abs_dir, reverse)
         word2id = pkl.load(open(join(abs_dir, 'vocab.pkl'), 'rb'))
         print('abs args:', abs_args)
-        if docgraph:
-            abstractor = CopySummGAT(**abs_args)
-        else:
-            abstractor = CopySummParagraph(**abs_args)
+        abstractor = multiBartGAT(**abs_args)
+        
+#         if docgraph:
+#             abstractor = CopySummGAT(**abs_args)
+#         else:
+#             abstractor = CopySummParagraph(**abs_args)
         abstractor.load_state_dict(abs_ckpt)
         self._device = torch.device('cuda' if cuda else 'cpu')
         self._cuda = cuda

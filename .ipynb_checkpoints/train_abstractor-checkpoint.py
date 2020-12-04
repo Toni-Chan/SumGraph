@@ -103,7 +103,7 @@ class MatchDataset_graph(CnnDmDataset):
         js_data = super().__getitem__(i)
         art_sents, abs_sents, nodes, edges, subgraphs, paras = (
             js_data['article'], js_data['abstract'], js_data[self.node_key], js_data[self.edge_key], js_data['subgraphs'], js_data['paragraph_merged'])
-        #art_sents = [' '.join(art_sents)]
+#         art_sents = [' '.join(art_sents)]
         abs_sents = [' '.join(abs_sents)]
         return art_sents, abs_sents, nodes, edges, subgraphs, paras
 
@@ -116,18 +116,19 @@ def configure_bart_gat(vocab_size, emb_dim, n_encoder, n_decoder, drop_encoder, 
                   load_from=None, gat_args={}, max_art=2048,
                   static_pos_emb=False):
     
-    net_args = BartConfig(
-        vocab_size=vocab_size,
-        d_model=emb_dim,
-        encoder_layers=n_encoder,
-        decoder_layers=n_decoder,
-        encoder_layerdrop=drop_encoder,
-        decoder_layerdrop=drop_decoder,
-        static_position_embedding=static_pos_emb,
-        max_position_embeddings=max_art,
-    )
+    net_args = BartConfig.from_pretrained('facebook/bart-base')
+#     (
+#         vocab_size=vocab_size,
+#         d_model=emb_dim,
+#         encoder_layers=n_encoder,
+#         decoder_layers=n_decoder,
+#         encoder_layerdrop=drop_encoder,
+#         decoder_layerdrop=drop_decoder,
+#         static_position_embedding=static_pos_emb,
+#         max_position_embeddings=max_art,
+#     )
     
-    net = multiBartGAT(net_args, gat_args)
+    net = multiBartGAT.from_pretrained('facebook/bart-base',model_args=gat_args)
     
     if load_from is not None:
         abs_ckpt = load_best_ckpt(load_from)
@@ -196,6 +197,7 @@ def configure_training_multitask(opt, lr, clip_grad, lr_decay, batch_size, mask_
         aux_loss = None
         for logit in logits2:
             if aux_loss is None:
+                assert logit.size()==targets2.size()
                 aux_loss = sequence_loss(logit, targets2, bce, pad_idx=-1, if_aux=True, fp16=False).mean()
             else:
                 aux_loss += sequence_loss(logit, targets2, bce, pad_idx=-1, if_aux=True, fp16=False).mean()
@@ -374,7 +376,7 @@ def main(args):
 
 
 if __name__ == '__main__':
-    torch.cuda.set_device(0)
+#     torch.cuda.set_device(0)
     parser = argparse.ArgumentParser(
         description='training of the abstractor (ML)'
     )
@@ -397,7 +399,7 @@ if __name__ == '__main__':
                         help='dropout rate of decoder between layers') # BartConfig.decoder_layerdrop
     parser.add_argument('--max_art', type=int, action='store', default=1024,
                         help='maximun words in a single article sentence') # BartConfig.max_position_embeddings
-    parser.add_argument('--max_abs', type=int, action='store', default=1024,
+    parser.add_argument('--max_abs', type=int, action='store', default=256,
                         help='maximun words in a single abstract sentence') # BartConfig.max_position_embeddings
     parser.add_argument('--static_pos_emb', type=int, action='store', default=False,
                         help='use of sinosuidal position embeddings or learned ones') # BartConfig.static_position_embeddings

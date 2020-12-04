@@ -48,6 +48,8 @@ def sequence_loss(logits, targets, xent_fn=None, pad_idx=0, if_aux=False, fp16=F
         assert logits.size()[:-1] == targets.size()
 
     mask = targets != pad_idx
+    
+    
     target = targets.masked_select(mask)
     if if_aux:
         target = target.float()

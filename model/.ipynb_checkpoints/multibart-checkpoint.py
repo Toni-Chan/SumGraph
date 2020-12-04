@@ -390,13 +390,15 @@ class BartEncoder(nn.Module):
         # check attention mask and invert
         if attention_mask is not None:
             attention_mask = invert_mask(attention_mask)
-
+        print(input_ids.size())
         inputs_embeds = self.embed_tokens(input_ids) * self.embed_scale
         embed_pos = self.embed_positions(input_ids)
         x = inputs_embeds + embed_pos
         x = self.layernorm_embedding(x)
         x = F.dropout(x, p=self.dropout, training=self.training)
         article_embedding = x
+        print(x.size())
+        
         # B x T x C -> T x B x C
         x = x.transpose(0, 1)
 
@@ -998,7 +1000,7 @@ class BartDecoder(nn.Module):
         )
 
 class multiBartGAT(PretrainedBartModel):
-    def __init__(self, config: BartConfig, gat_args):
+    def __init__(self, config: BartConfig, model_args):
         """Initialize the GAT-multi-BART model.
 
         Args:
@@ -1013,7 +1015,7 @@ class multiBartGAT(PretrainedBartModel):
 
         self.encoder = BartEncoder(config, self.shared)
         self.decoder = BartDecoder(config, self.shared)
-
+        gat_args=model_args
         # GAT settings
         feat_emb_dim = config.d_model // 4
         graph_hsz = gat_args['graph_hsz']
@@ -1146,6 +1148,8 @@ class multiBartGAT(PretrainedBartModel):
         masks = []
         bs, n_node, n_word = nodes.size()
         nodes = nodes.view(bs, -1).unsqueeze(2).expand(bs, n_node * n_word, d_word)
+        print(nodes.size())
+        print(articles.size())
         nodes = articles.gather(1, nodes).view(bs, n_node, n_word, d_word).contiguous()
         nmask = nmask.unsqueeze(3).expand(bs, n_node, n_word, d_word)
         nodes = self.node_enc(nodes, mask=nmask)
@@ -1158,6 +1162,7 @@ class multiBartGAT(PretrainedBartModel):
         elif self._mask_type == 'soft':
             nodes, node_mask = self._graph_mask(nodes, _input=nodes)
             masks.append(node_mask.squeeze(2))
+            
 
         # topics, topic_length = self._graph_enc(batch_adjs, nodes, node_lists)
         topics, topic_length = self.graph_enc(batch_adjs, nodes, node_lists)
@@ -1181,24 +1186,72 @@ class multiBartGAT(PretrainedBartModel):
         batch_size = len(art_lens)
         vsize = self._embedding.num_embeddings
 
-        # 1. send to encode
-        last_hidden,hidden_states,attention = self.encoder(article)
+        # 1. Load text to encoder
+        return_dict=False
+        encoder_outputs = self.encoder(
+                input_ids=article,
+                return_dict=return_dict,
+            output_attentions=True,
+            output_hidden_states=True,
+            )
+        (last_hidden,hidden_states,attention,article_embedding) = encoder_outputs
+        # 2. Use encoded text and graph input to from attention
+        self._gold =False
+        if self._gold:
+            sw_mask = sw_mask
+        else:
+            sw_mask = None
 
-        # 2. GAT
-        outputs = self._encode_graph(hidden_states, nodes, nmask, None,
-                                              None, adjs, node_lists, node_mask=None,
+        if self._mask_type == 'soft' or self._mask_type == 'none':
+            outputs = self._encode_graph(article_embedding, nodes, nmask, relations,
+                                              rmask, adjs, node_lists, node_mask=None,
                                               nodefreq=feature_dict['node_freq'])
+        else:
+            outputs = self._encode_graph(article_embedding, nodes, nmask, relations, rmask, adjs, node_lists, sw_mask,
+                                       nodefreq=feature_dict['node_freq'])
+        
         if self._hierarchical_attn:
             topics, masks, paras = outputs
         elif 'soft' in self._mask_type:
-            topics, masks = outputs
+            (topics,topics_len), masks = outputs
             paras = None
         else:
             topics = outputs
             paras = None
+        ext_info = None
 
-        mask = len_mask(art_lens, attention.device).unsqueeze(-2)
+        mask = len_mask(art_lens, attention[-1].device).unsqueeze(-2)
 
+        # send the source to BART again?
+
+        # graph_encoded = self.encoder(topics, attention_mask=masks)
+        # new_last_hidden = graph_encoded.last_hidden_state
+        # new_attention = graph_encoded.attentions
+        # new_hidden_states = graph_encoded.hidden_states
+        
+        # 3. Load to decoder
+        
+
+        topics=torch.cat([last_hidden,topics],dim=1)
+        decoder_outputs = self.decoder(
+            decoder_input_ids,
+            topics,
+            encoder_padding_mask=None,
+            decoder_padding_mask=decoder_padding_mask,
+            decoder_causal_mask=causal_mask,
+            use_cache=False
+        )
+
+        final_state = decoder_outputs[0]
+
+        lm_logits = F.linear(final_state, self.shared.weight, bias=self.final_logits_bias)
+        lm_logits = (lm_logits,)
+        if 'soft' in self._mask_type:
+            lm_logits += (masks,)
+        return lm_logits
+    
+    
+    
         # graph_encoded = self.encoder(topics, attention_mask=masks)
         # new_last_hidden = graph_encoded.last_hidden_state
         # new_attention = graph_encoded.attentions
@@ -1249,24 +1302,41 @@ class multiBartGAT(PretrainedBartModel):
         batch_size = len(art_lens)
         vsize = self._embedding.num_embeddings
 
-        # 1. send to encode
-        last_hidden,hidden_states,attention = self.encoder(article)
+                # 1. Load text to encoder
+        return_dict=False
+        encoder_outputs = self.encoder(
+                input_ids=article,
+                return_dict=return_dict,
+            output_attentions=True,
+            output_hidden_states=True,
+            )
+        (last_hidden,hidden_states,attention,article_embedding) = encoder_outputs
+        # 2. Use encoded text and graph input to from attention
+        self._gold =False
+        if self._gold:
+            sw_mask = sw_mask
+        else:
+            sw_mask = None
 
-        # 2. GAT
-        outputs = self._encode_graph(hidden_states, nodes, nmask, None,
-                                              None, adjs, node_lists, node_mask=None,
+        if self._mask_type == 'soft' or self._mask_type == 'none':
+            outputs = self._encode_graph(article_embedding, nodes, nmask, relations,
+                                              rmask, adjs, node_lists, node_mask=None,
                                               nodefreq=feature_dict['node_freq'])
+        else:
+            outputs = self._encode_graph(article_embedding, nodes, nmask, relations, rmask, adjs, node_lists, sw_mask,
+                                       nodefreq=feature_dict['node_freq'])
+        
         if self._hierarchical_attn:
             topics, masks, paras = outputs
         elif 'soft' in self._mask_type:
-            topics, masks = outputs
+            (topics,topics_len), masks = outputs
             paras = None
         else:
             topics = outputs
             paras = None
+        ext_info = None
 
-        mask = len_mask(art_lens, attention.device).unsqueeze(-2)
-
+        mask = len_mask(art_lens, attention[-1].device).unsqueeze(-2)
         # graph_encoded = self.encoder(topics, attention_mask=masks)
         # new_last_hidden = graph_encoded.last_hidden_state
         # new_attention = graph_encoded.attentions
