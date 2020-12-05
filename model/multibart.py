@@ -21,7 +21,7 @@ from transformers.modeling_outputs import (
     BaseModelOutputWithPastAndCrossAttentions
 )
 from transformers.utils import logging
-from transformers import BartForConditionalGeneration, BartTokenizer 
+from transformers import BartForConditionalGeneration, BartTokenizer
 from transformers.modeling_bart import PretrainedBartModel
 # from generation_utils import BartGenerationMixin  # generation_utils changed based on multi-bart
 
@@ -42,7 +42,7 @@ from .util import (
 from model.extract import MeanSentEncoder
 MAX_FREQ = 100
 
-MULTI_INPUTS=['source','graph']
+MULTI_INPUTS = ['source', 'graph']
 
 logger = logging.get_logger(__name__)
 
@@ -60,6 +60,8 @@ BART_PRETRAINED_MODEL_ARCHIVE_LIST = [
 ]
 
 ######## Helper modules ########
+
+
 class LearnedPositionalEmbedding(nn.Embedding):
     """
     This module learns positional embeddings up to a fixed maximum size. Padding ids are ignored by either offsetting
@@ -79,10 +81,12 @@ class LearnedPositionalEmbedding(nn.Embedding):
         """Input is expected to be of size [bsz x seqlen]."""
         bsz, seq_len = input_ids.shape[:2]
         if use_cache:
-            positions = input_ids.data.new(1, 1).fill_(seq_len - 1)  # called before slicing
+            positions = input_ids.data.new(1, 1).fill_(
+                seq_len - 1)  # called before slicing
         else:
             # starts at 0, ends at 1-seq_len
-            positions = torch.arange(seq_len, dtype=torch.long, device=self.weight.device)
+            positions = torch.arange(
+                seq_len, dtype=torch.long, device=self.weight.device)
         return super().forward(positions + self.offset)
 
 
@@ -101,7 +105,8 @@ class SinusoidalPositionalEmbedding(nn.Embedding):
         """
         n_pos, dim = out.shape
         position_enc = np.array(
-            [[pos / np.power(10000, 2 * (j // 2) / dim) for j in range(dim)] for pos in range(n_pos)]
+            [[pos / np.power(10000, 2 * (j // 2) / dim)
+              for j in range(dim)] for pos in range(n_pos)]
         )
         out.requires_grad = False  # set early to avoid an error in pytorch-1.8+
         sentinel = dim // 2 if dim % 2 == 0 else (dim // 2) + 1
@@ -115,10 +120,12 @@ class SinusoidalPositionalEmbedding(nn.Embedding):
         """Input is expected to be of size [bsz x seqlen]."""
         bsz, seq_len = input_ids.shape[:2]
         if use_cache:
-            positions = input_ids.data.new(1, 1).fill_(seq_len - 1)  # called before slicing
+            positions = input_ids.data.new(1, 1).fill_(
+                seq_len - 1)  # called before slicing
         else:
             # starts at 0, ends at 1-seq_len
-            positions = torch.arange(seq_len, dtype=torch.long, device=self.weight.device)
+            positions = torch.arange(
+                seq_len, dtype=torch.long, device=self.weight.device)
         return super().forward(positions)
 
 
@@ -138,7 +145,8 @@ class Attention(nn.Module):
         self.num_heads = num_heads
         self.dropout = dropout
         self.head_dim = embed_dim // num_heads
-        assert self.head_dim * num_heads == self.embed_dim, "embed_dim must be divisible by num_heads"
+        assert self.head_dim * \
+            num_heads == self.embed_dim, "embed_dim must be divisible by num_heads"
         self.scaling = self.head_dim ** -0.5
 
         self.encoder_decoder_attention = encoder_decoder_attention
@@ -147,7 +155,6 @@ class Attention(nn.Module):
         self.q_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
         self.cache_key = "encoder_decoder" if self.encoder_decoder_attention else "self"
-        
 
     def _shape(self, tensor, seq_len, bsz):
         return tensor.contiguous().view(seq_len, bsz * self.num_heads, self.head_dim).transpose(0, 1)
@@ -164,8 +171,7 @@ class Attention(nn.Module):
         """Input shape: Time(SeqLen) x Batch x Channel"""
         static_kv: bool = self.encoder_decoder_attention
         tgt_len, bsz, embed_dim = query.size()
-        
-            
+
         # get here for encoder decoder cause of static_kv
         if layer_state is not None:  # reuse k,v and encoder_padding_mask
             saved_state = layer_state.get(self.cache_key, {})
@@ -173,11 +179,11 @@ class Attention(nn.Module):
                 # previous time steps are cached - no need to recompute key and value if they are static
                 key = None
             # saved_state = None
-            
+
         else:
             # this branch is hit by encoder
             saved_state = None
-        
+
         q = self.q_proj(query) * self.scaling
         if static_kv and key is None:  # cross-attention with cache
             k = v = None
@@ -199,43 +205,55 @@ class Attention(nn.Module):
 
         # Update cache
         if isinstance(layer_state, dict):
-            cached_shape = (bsz, self.num_heads, -1, self.head_dim)  # bsz must be first for reorder_cache
-            layer_state[self.cache_key] = dict(prev_key=k.view(*cached_shape), prev_value=v.view(*cached_shape))
+            # bsz must be first for reorder_cache
+            cached_shape = (bsz, self.num_heads, -1, self.head_dim)
+            layer_state[self.cache_key] = dict(prev_key=k.view(
+                *cached_shape), prev_value=v.view(*cached_shape))
 
         src_len = k.size(1)
-        assert key_padding_mask is None or key_padding_mask.shape == (bsz, src_len)
+        assert key_padding_mask is None or key_padding_mask.shape == (
+            bsz, src_len)
         attn_weights = torch.bmm(q, k.transpose(1, 2))
         assert attn_weights.size() == (bsz * self.num_heads, tgt_len, src_len)
 
         if attn_mask is not None:
-            attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len) + attn_mask
-            attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
+            attn_weights = attn_weights.view(
+                bsz, self.num_heads, tgt_len, src_len) + attn_mask
+            attn_weights = attn_weights.view(
+                bsz * self.num_heads, tgt_len, src_len)
 
         # Note: deleted workaround to get around fork/join parallelism not supporting Optional types. on 2020/10/15
 
         if key_padding_mask is not None:  # don't attend to padding symbols
-            attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len)
+            attn_weights = attn_weights.view(
+                bsz, self.num_heads, tgt_len, src_len)
             reshaped = key_padding_mask.unsqueeze(1).unsqueeze(2)
             attn_weights = attn_weights.masked_fill(reshaped, float("-inf"))
-            attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
+            attn_weights = attn_weights.view(
+                bsz * self.num_heads, tgt_len, src_len)
         attn_weights = F.softmax(attn_weights, dim=-1)
-        attn_probs = F.dropout(attn_weights, p=self.dropout, training=self.training)
+        attn_probs = F.dropout(
+            attn_weights, p=self.dropout, training=self.training)
 
         assert v is not None
         attn_output = torch.bmm(attn_probs, v)
         assert attn_output.size() == (bsz * self.num_heads, tgt_len, self.head_dim)
-        attn_output = attn_output.transpose(0, 1).contiguous().view(tgt_len, bsz, embed_dim)
+        attn_output = attn_output.transpose(
+            0, 1).contiguous().view(tgt_len, bsz, embed_dim)
         attn_output = self.out_proj(attn_output)
         if output_attentions:
-            attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len)
+            attn_weights = attn_weights.view(
+                bsz, self.num_heads, tgt_len, src_len)
         else:
             attn_weights = None
         return attn_output, attn_weights
 
     def _concat_saved_state(self, k, v, saved_state, static_kv, bsz) -> Tuple[Tensor]:
         # saved states are stored with shape (bsz, num_heads, seq_len, head_dim)
-        prev_K = saved_state["prev_key"].view(bsz * self.num_heads, -1, self.head_dim)
-        prev_V = saved_state["prev_value"].view(bsz * self.num_heads, -1, self.head_dim)
+        prev_K = saved_state["prev_key"].view(
+            bsz * self.num_heads, -1, self.head_dim)
+        prev_V = saved_state["prev_value"].view(
+            bsz * self.num_heads, -1, self.head_dim)
         new_K = prev_K if static_kv else torch.cat([prev_K, k], dim=1)
         new_V = prev_V if static_kv else torch.cat([prev_V, v], dim=1)
         return new_K, new_V
@@ -280,11 +298,13 @@ class BartClassificationHead(nn.Module):
 
 ######## Encoder-Decoder ########
 
+
 class EncoderLayer(nn.Module):
     def __init__(self, config: BartConfig):
         super().__init__()
         self.embed_dim = config.d_model
-        self.self_attn = Attention(self.embed_dim, config.encoder_attention_heads, dropout=config.attention_dropout)
+        self.self_attn = Attention(
+            self.embed_dim, config.encoder_attention_heads, dropout=config.attention_dropout)
         self.normalize_before = config.normalize_before
         self.self_attn_layer_norm = LayerNorm(self.embed_dim)
         self.dropout = config.dropout
@@ -349,7 +369,8 @@ class BartEncoder(nn.Module):
         self.layerdrop = config.encoder_layerdrop
 
         embed_dim = embed_tokens.embedding_dim
-        self.embed_scale = math.sqrt(embed_dim) if config.scale_embedding else 1.0
+        self.embed_scale = math.sqrt(
+            embed_dim) if config.scale_embedding else 1.0
         self.padding_idx = embed_tokens.padding_idx
         self.max_source_positions = config.max_position_embeddings
 
@@ -365,10 +386,14 @@ class BartEncoder(nn.Module):
                 self.padding_idx,
                 config.extra_pos_embeddings,
             )
-        self.layers = nn.ModuleList([EncoderLayer(config) for _ in range(config.encoder_layers)])
-        self.layernorm_embedding = LayerNorm(embed_dim) if config.normalize_embedding else nn.Identity()
+        self.layers = nn.ModuleList([EncoderLayer(config)
+                                     for _ in range(config.encoder_layers)])
+        self.layernorm_embedding = LayerNorm(
+            embed_dim) if config.normalize_embedding else nn.Identity()
         # mbart has one extra layer_norm
-        self.layer_norm = LayerNorm(config.d_model) if config.add_final_layer_norm else None
+        self.layer_norm = LayerNorm(
+            config.d_model) if config.add_final_layer_norm else None
+
     def forward(
         self, input_ids, attention_mask=None, output_attentions=False, output_hidden_states=False, return_dict=False
     ):
@@ -396,7 +421,7 @@ class BartEncoder(nn.Module):
         x = self.layernorm_embedding(x)
         x = F.dropout(x, p=self.dropout, training=self.training)
         article_embedding = x
-        
+
         # B x T x C -> T x B x C
         x = x.transpose(0, 1)
 
@@ -410,7 +435,8 @@ class BartEncoder(nn.Module):
             if self.training and (dropout_probability < self.layerdrop):  # skip the layer
                 attn = None
             else:
-                x, attn = encoder_layer(x, attention_mask, output_attentions=output_attentions)
+                x, attn = encoder_layer(
+                    x, attention_mask, output_attentions=output_attentions)
 
             if output_attentions:
                 all_attentions = all_attentions + (attn,)
@@ -420,14 +446,15 @@ class BartEncoder(nn.Module):
         if output_hidden_states:
             encoder_states.append(x)
             # T x B x C -> B x T x C
-            encoder_states = tuple(hidden_state.transpose(0, 1) for hidden_state in encoder_states)
+            encoder_states = tuple(hidden_state.transpose(0, 1)
+                                   for hidden_state in encoder_states)
 
         # T x B x C -> B x T x C
         x = x.transpose(0, 1)
 
         if not return_dict:
-            
-            return tuple(v for v in [x, encoder_states, all_attentions,article_embedding] if v is not None)
+
+            return tuple(v for v in [x, encoder_states, all_attentions, article_embedding] if v is not None)
         return BaseModelOutput(last_hidden_state=x, hidden_states=encoder_states, attentions=all_attentions)
 
 
@@ -447,50 +474,48 @@ class multiDecoderLayer(nn.Module):
         self.normalize_before = config.normalize_before
 
         self.self_attn_layer_norm = LayerNorm(self.embed_dim)
-        
-        
+
         self.encoder_attn = Attention(
             self.embed_dim,
             config.decoder_attention_heads,
             dropout=config.attention_dropout,
             encoder_decoder_attention=True,
         )
-        self.encoder_attn_persona =  Attention(
+        self.encoder_attn_persona = Attention(
             self.embed_dim,
             config.decoder_attention_heads,
             dropout=config.attention_dropout,
             encoder_decoder_attention=True,
         )
-        self.encoder_attn_intent =  Attention(
+        self.encoder_attn_intent = Attention(
             self.embed_dim,
             config.decoder_attention_heads,
             dropout=config.attention_dropout,
             encoder_decoder_attention=True,
         )
-        self.encoder_attn_intent.cache_key = "encoder_decoder_i" 
-        
-        self.encoder_attn_persona.cache_key = "encoder_decoder_p" 
-        
+        self.encoder_attn_intent.cache_key = "encoder_decoder_i"
+
+        self.encoder_attn_persona.cache_key = "encoder_decoder_p"
+
         self.encoder_attn_layer_norm = LayerNorm(self.embed_dim)
-        
+
         self.weight_attn = nn.Linear(3*self.embed_dim, self.embed_dim)
         # self.weight_attn = torch.nn.Parameter(torch.ones(len(MULTI_INPUTS), 1) / len(MULTI_INPUTS))
-        
+
         self.fc1 = nn.Linear(self.embed_dim, config.decoder_ffn_dim)
         self.fc2 = nn.Linear(config.decoder_ffn_dim, self.embed_dim)
         self.final_layer_norm = LayerNorm(self.embed_dim)
-        self.encoder_dict = {'persona':self.encoder_attn_persona,'source':self.encoder_attn,'event':self.encoder_attn_intent}
-        
+        self.encoder_dict = {'persona': self.encoder_attn_persona,
+                             'source': self.encoder_attn, 'event': self.encoder_attn_intent}
 
-        
     def reload_module_dict(self):
         self.encoder_attn_intent = deepcopy(self.encoder_attn)
-        self.encoder_attn_intent.cache_key = "encoder_decoder_i" 
+        self.encoder_attn_intent.cache_key = "encoder_decoder_i"
         self.encoder_attn_persona = deepcopy(self.encoder_attn)
-        self.encoder_attn_persona.cache_key = "encoder_decoder_p" 
-        self.encoder_dict = {'persona':self.encoder_attn_persona,'source':self.encoder_attn,'event':self.encoder_attn_intent}
-        
-            
+        self.encoder_attn_persona.cache_key = "encoder_decoder_p"
+        self.encoder_dict = {'persona': self.encoder_attn_persona,
+                             'source': self.encoder_attn, 'event': self.encoder_attn_intent}
+
     def forward(
         self,
         x,
@@ -527,9 +552,9 @@ class multiDecoderLayer(nn.Module):
         if self.normalize_before:
             x = self.encoder_attn_layer_norm(x)
         cross_attn_weights = {}
-        x_attn_output ={}
+        x_attn_output = {}
         for key in MULTI_INPUTS:
-            x_attn_output[key],cross_attn_weights[key] = self.encoder_dict[key](
+            x_attn_output[key], cross_attn_weights[key] = self.encoder_dict[key](
                 query=x,
                 key=encoder_hidden_states[key],
                 key_padding_mask=encoder_attn_mask[key],
@@ -537,9 +562,10 @@ class multiDecoderLayer(nn.Module):
                 output_attentions=output_attentions,
             )
         # x = torch.mean(torch.stack([x_attn_output[key] for key in MULTI_INPUTS]) * self.weight_attn.unsqueeze(-1).unsqueeze(-1), dim=0)
-        x = self.weight_attn(torch.cat([x_attn_output[key] for key in MULTI_INPUTS], dim=-1))
+        x = self.weight_attn(
+            torch.cat([x_attn_output[key] for key in MULTI_INPUTS], dim=-1))
         x = F.dropout(x, p=self.dropout, training=self.training)
-        
+
         x = residual + x
         if not self.normalize_before:
             x = self.encoder_attn_layer_norm(x)
@@ -579,7 +605,8 @@ class multiBartDecoder(nn.Module):
         self.do_blenderbot_90_layernorm = config.do_blenderbot_90_layernorm  # layernorm variant
         self.padding_idx = embed_tokens.padding_idx
         self.max_target_positions = config.max_position_embeddings
-        self.embed_scale = math.sqrt(config.d_model) if config.scale_embedding else 1.0
+        self.embed_scale = math.sqrt(
+            config.d_model) if config.scale_embedding else 1.0
         self.embed_tokens = embed_tokens
         if config.static_position_embeddings:
             self.embed_positions = SinusoidalPositionalEmbedding(
@@ -595,8 +622,11 @@ class multiBartDecoder(nn.Module):
         self.layers = nn.ModuleList(
             [multiDecoderLayer(config) for _ in range(config.decoder_layers)]
         )  # type: List[DecoderLayer]
-        self.layernorm_embedding = LayerNorm(config.d_model) if config.normalize_embedding else nn.Identity()
-        self.layer_norm = LayerNorm(config.d_model) if config.add_final_layer_norm else None
+        self.layernorm_embedding = LayerNorm(
+            config.d_model) if config.normalize_embedding else nn.Identity()
+        self.layer_norm = LayerNorm(
+            config.d_model) if config.add_final_layer_norm else None
+
     def reload_module_dict(self):
         for layer in self.layers:
             layer.reload_module_dict()
@@ -652,7 +682,8 @@ class multiBartDecoder(nn.Module):
         encoder_padding_mask_inverted = {}
         if encoder_padding_mask is not None:
             for k in encoder_padding_mask.keys():
-                encoder_padding_mask_inverted[k] = invert_mask(encoder_padding_mask[k])
+                encoder_padding_mask_inverted[k] = invert_mask(
+                    encoder_padding_mask[k])
 
         # embed positions
         positions = self.embed_positions(input_ids, use_cache=use_cache)
@@ -674,8 +705,9 @@ class multiBartDecoder(nn.Module):
         # Convert to Bart output format: (seq_len, BS, model_dim) -> (BS, seq_len, model_dim)
         x = x.transpose(0, 1)
         for key in MULTI_INPUTS:
-            encoder_hidden_states[key] = encoder_hidden_states[key].transpose(0, 1)
-            
+            encoder_hidden_states[key] = encoder_hidden_states[key].transpose(
+                0, 1)
+
         # decoder layers
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
@@ -714,11 +746,12 @@ class multiBartDecoder(nn.Module):
 
         # Convert to standard output format: (seq_len, BS, model_dim) -> (BS, seq_len, model_dim)
         if output_hidden_states:
-            all_hidden_states = tuple(hidden_state.transpose(0, 1) for hidden_state in all_hidden_states)
+            all_hidden_states = tuple(hidden_state.transpose(
+                0, 1) for hidden_state in all_hidden_states)
         x = x.transpose(0, 1)
         for key in MULTI_INPUTS:
-            encoder_hidden_states[key] = encoder_hidden_states[key].transpose(0, 1)
-          
+            encoder_hidden_states[key] = encoder_hidden_states[key].transpose(
+                0, 1)
 
         next_cache = next_decoder_cache if use_cache else None
         if not return_dict:
@@ -746,6 +779,7 @@ class multiSeq2SeqModelOutput(Seq2SeqModelOutput):
     encoder_attentions: dict()
 
 ######## Usage of BART: encoder, decoder ########
+
 
 class DecoderLayer(nn.Module):
     def __init__(self, config: BartConfig):
@@ -855,7 +889,8 @@ class BartDecoder(nn.Module):
         self.do_blenderbot_90_layernorm = config.do_blenderbot_90_layernorm  # layernorm variant
         self.padding_idx = embed_tokens.padding_idx
         self.max_target_positions = config.max_position_embeddings
-        self.embed_scale = math.sqrt(config.d_model) if config.scale_embedding else 1.0
+        self.embed_scale = math.sqrt(
+            config.d_model) if config.scale_embedding else 1.0
         self.embed_tokens = embed_tokens
         if config.static_position_embeddings:
             self.embed_positions = SinusoidalPositionalEmbedding(
@@ -871,8 +906,10 @@ class BartDecoder(nn.Module):
         self.layers = nn.ModuleList(
             [DecoderLayer(config) for _ in range(config.decoder_layers)]
         )  # type: List[DecoderLayer]
-        self.layernorm_embedding = LayerNorm(config.d_model) if config.normalize_embedding else nn.Identity()
-        self.layer_norm = LayerNorm(config.d_model) if config.add_final_layer_norm else None
+        self.layernorm_embedding = LayerNorm(
+            config.d_model) if config.normalize_embedding else nn.Identity()
+        self.layer_norm = LayerNorm(
+            config.d_model) if config.add_final_layer_norm else None
 
     def forward(
         self,
@@ -980,7 +1017,8 @@ class BartDecoder(nn.Module):
 
         # Convert to standard output format: (seq_len, BS, model_dim) -> (BS, seq_len, model_dim)
         if output_hidden_states:
-            all_hidden_states = tuple(hidden_state.transpose(0, 1) for hidden_state in all_hidden_states)
+            all_hidden_states = tuple(hidden_state.transpose(
+                0, 1) for hidden_state in all_hidden_states)
         x = x.transpose(0, 1)
         encoder_hidden_states = encoder_hidden_states.transpose(0, 1)
 
@@ -996,6 +1034,7 @@ class BartDecoder(nn.Module):
             attentions=all_self_attns,
             cross_attentions=all_cross_attentions,
         )
+
 
 class multiBartGAT(PretrainedBartModel):
     def __init__(self, config: BartConfig, model_args):
@@ -1013,7 +1052,7 @@ class multiBartGAT(PretrainedBartModel):
 
         self.encoder = BartEncoder(config, self.shared)
         self.decoder = BartDecoder(config, self.shared)
-        gat_args=model_args
+        gat_args = model_args
         # GAT settings
         feat_emb_dim = config.d_model // 4
         graph_hsz = gat_args['graph_hsz']
@@ -1023,11 +1062,12 @@ class multiBartGAT(PretrainedBartModel):
         gat_args['graph_hsz'] = graph_hsz
 
         self._graph_enc = subgraph_encode(gat_args)
-        
+
         self.node_freq = gat_args['node_freq']
         if gat_args['node_freq']:
             graph_hsz += feat_emb_dim
-            self._node_freq_embedding = nn.Embedding(MAX_FREQ, feat_emb_dim, padding_idx=0)
+            self._node_freq_embedding = nn.Embedding(
+                MAX_FREQ, feat_emb_dim, padding_idx=0)
         gat_args['graph_hsz'] = graph_hsz
 
         self.graph_enc = subgraph_encode(gat_args)
@@ -1038,15 +1078,15 @@ class multiBartGAT(PretrainedBartModel):
         if mask_type == 'encoder':
             self._graph_mask = node_mask(mask_type='gold')
         elif mask_type == 'soft':
-            self._graph_mask = node_mask(mask_type=mask_type, emb_dim=graph_hsz)
+            self._graph_mask = node_mask(
+                mask_type=mask_type, emb_dim=graph_hsz)
         else:
             self._graph_mask = node_mask(mask_type='none')
 
-        self.register_buffer("final_logits_bias", torch.zeros((1, self.shared.num_embeddings)))
+        self.register_buffer("final_logits_bias", torch.zeros(
+            (1, self.shared.num_embeddings)))
         self.init_weights()
         self._hierarchical_attn = False
-
-
 
     def forward(self, article, art_lens, abstract, extend_art, extend_vsize, ninfo, rinfo, ext_ninfo=None):
         """Forward pass of the whole encoder-decoder process.
@@ -1068,25 +1108,26 @@ class multiBartGAT(PretrainedBartModel):
         (relations, rmask, triples, adjs) = rinfo
 
         decoder_input_ids, decoder_padding_mask, causal_mask = _prepare_bart_decoder_inputs(
-                self.config,
-                input_ids=abstract,
-                causal_mask_dtype=self.shared.weight.dtype,
-            )
+            self.config,
+            input_ids=abstract,
+            causal_mask_dtype=self.shared.weight.dtype,
+        )
 
         assert decoder_input_ids is not None
 
-        ### Forward pass
+        # Forward pass
         # 1. Load text to encoder
-        return_dict=False
+        return_dict = False
         encoder_outputs = self.encoder(
-                input_ids=article,
-                return_dict=return_dict,
+            input_ids=article,
+            return_dict=return_dict,
             output_attentions=True,
             output_hidden_states=True,
-            )
-        (last_hidden,hidden_states,attention,article_embedding) = encoder_outputs
+        )
+        (last_hidden, hidden_states, attention,
+         article_embedding) = encoder_outputs
         # 2. Use encoded text and graph input to from attention
-        self._gold =False
+        self._gold = False
         if self._gold:
             sw_mask = sw_mask
         else:
@@ -1094,16 +1135,16 @@ class multiBartGAT(PretrainedBartModel):
 
         if self._mask_type == 'soft' or self._mask_type == 'none':
             outputs = self._encode_graph(article_embedding, nodes, nmask, relations,
-                                              rmask, adjs, node_lists, node_mask=None,
-                                              nodefreq=feature_dict['node_freq'])
+                                         rmask, adjs, node_lists, node_mask=None,
+                                         nodefreq=feature_dict['node_freq'])
         else:
             outputs = self._encode_graph(article_embedding, nodes, nmask, relations, rmask, adjs, node_lists, sw_mask,
-                                       nodefreq=feature_dict['node_freq'])
-        
+                                         nodefreq=feature_dict['node_freq'])
+
         if self._hierarchical_attn:
             topics, masks, paras = outputs
         elif 'soft' in self._mask_type:
-            (topics,topics_len), masks = outputs
+            (topics, topics_len), masks = outputs
             paras = None
         else:
             topics = outputs
@@ -1118,11 +1159,10 @@ class multiBartGAT(PretrainedBartModel):
         # new_last_hidden = graph_encoded.last_hidden_state
         # new_attention = graph_encoded.attentions
         # new_hidden_states = graph_encoded.hidden_states
-        
-        # 3. Load to decoder
-        
 
-        topics=torch.cat([last_hidden,topics],dim=1)
+        # 3. Load to decoder
+
+        topics = torch.cat([last_hidden, topics], dim=1)
         decoder_outputs = self.decoder(
             decoder_input_ids,
             topics,
@@ -1134,7 +1174,8 @@ class multiBartGAT(PretrainedBartModel):
 
         final_state = decoder_outputs[0]
 
-        lm_logits = F.linear(final_state, self.shared.weight, bias=self.final_logits_bias)
+        lm_logits = F.linear(final_state, self.shared.weight,
+                             bias=self.final_logits_bias)
         lm_logits = (lm_logits,)
         if 'soft' in self._mask_type:
             lm_logits += (masks,)
@@ -1145,8 +1186,10 @@ class multiBartGAT(PretrainedBartModel):
 
         masks = []
         bs, n_node, n_word = nodes.size()
-        nodes = nodes.view(bs, -1).unsqueeze(2).expand(bs, n_node * n_word, d_word)
-        nodes = articles.gather(1, nodes).view(bs, n_node, n_word, d_word).contiguous()
+        nodes = nodes.view(bs, -1).unsqueeze(2).expand(bs,
+                                                       n_node * n_word, d_word)
+        nodes = articles.gather(1, nodes).view(
+            bs, n_node, n_word, d_word).contiguous()
         nmask = nmask.unsqueeze(3).expand(bs, n_node, n_word, d_word)
         nodes = self.node_enc(nodes, mask=nmask)
         if self.node_freq:
@@ -1158,7 +1201,6 @@ class multiBartGAT(PretrainedBartModel):
         elif self._mask_type == 'soft':
             nodes, node_mask = self._graph_mask(nodes, _input=nodes)
             masks.append(node_mask.squeeze(2))
-            
 
         # topics, topic_length = self._graph_enc(batch_adjs, nodes, node_lists)
         topics, topic_length = self.graph_enc(batch_adjs, nodes, node_lists)
@@ -1174,42 +1216,42 @@ class multiBartGAT(PretrainedBartModel):
         # else:
         #     return (topics, topic_length)
 
-
     def greedy(self, article, art_lens, extend_art, extend_vsize,
-                     nodes, nmask, node_num, feature_dict, node_lists, adjs,
-                     go, eos, unk, max_len, tar_in):
+               nodes, nmask, node_num, feature_dict, node_lists, adjs,
+               go, eos, unk, max_len, tar_in):
         """ greedy decode support batching"""
         batch_size = len(art_lens)
         vsize = self._embedding.num_embeddings
 
         # 1. Load text to encoder
-        return_dict=False
+        return_dict = False
         encoder_outputs = self.encoder(
-                input_ids=article,
-                return_dict=return_dict,
+            input_ids=article,
+            return_dict=return_dict,
             output_attentions=True,
             output_hidden_states=True,
-            )
-        (last_hidden,hidden_states,attention,article_embedding) = encoder_outputs
+        )
+        (last_hidden, hidden_states, attention,
+         article_embedding) = encoder_outputs
         # 2. Use encoded text and graph input to from attention
-        self._gold =False
+        self._gold = False
         if self._gold:
             sw_mask = sw_mask
         else:
             sw_mask = None
 
         if self._mask_type == 'soft' or self._mask_type == 'none':
-            outputs = self._encode_graph(article_embedding, nodes, nmask, relations,
-                                              rmask, adjs, node_lists, node_mask=None,
-                                              nodefreq=feature_dict['node_freq'])
+            outputs = self._encode_graph(article_embedding, nodes, nmask, None,
+                                          None, adjs, node_lists, node_mask=None,
+                                         nodefreq=feature_dict['node_freq'])
         else:
-            outputs = self._encode_graph(article_embedding, nodes, nmask, relations, rmask, adjs, node_lists, sw_mask,
-                                       nodefreq=feature_dict['node_freq'])
-        
+            outputs = self._encode_graph(article_embedding, nodes, nmask, None, None, adjs, node_lists, sw_mask,
+                                         nodefreq=feature_dict['node_freq'])
+
         if self._hierarchical_attn:
             topics, masks, paras = outputs
         elif 'soft' in self._mask_type:
-            (topics,topics_len), masks = outputs
+            (topics, topics_len), masks = outputs
             paras = None
         else:
             topics = outputs
@@ -1224,30 +1266,11 @@ class multiBartGAT(PretrainedBartModel):
         # new_last_hidden = graph_encoded.last_hidden_state
         # new_attention = graph_encoded.attentions
         # new_hidden_states = graph_encoded.hidden_states
-        
+
         # 3. Load to decoder
-        
 
-        topics=torch.cat([last_hidden,topics],dim=1)
-        decoder_outputs = self.decoder(
-            decoder_input_ids,
-            topics,
-            encoder_padding_mask=None,
-            decoder_padding_mask=decoder_padding_mask,
-            decoder_causal_mask=causal_mask,
-            use_cache=False
-        )
+        topics = torch.cat([last_hidden, topics], dim=1)
 
-        final_state = decoder_outputs[0]
-
-        lm_logits = F.linear(final_state, self.shared.weight, bias=self.final_logits_bias)
-        lm_logits = (lm_logits,)
-        if 'soft' in self._mask_type:
-            lm_logits += (masks,)
-        return lm_logits
-    
-    
-    
         # graph_encoded = self.encoder(topics, attention_mask=masks)
         # new_last_hidden = graph_encoded.last_hidden_state
         # new_attention = graph_encoded.attentions
@@ -1265,15 +1288,16 @@ class multiBartGAT(PretrainedBartModel):
                 decoder_padding_mask=None,
                 decoder_causal_mask=None,
                 use_cache=False
-                )
-            
+            )
+
             new_last_hidden = decoder_outputs[0]
-            logits = F.linear(new_last_hidden, self.shared.weight, bias=self.final_logits_bias)
+            logits = F.linear(new_last_hidden, self.shared.weight,
+                              bias=self.final_logits_bias)
             attn_score = decoder_outputs.attention
-            
+
             # Select out tokens
             tok = torch.max(logits, dim=1, keepdim=True)[1]
-            
+
             #print('greedy tok:', tok)
             if i == 0:
                 unfinished = (tok != eos)
@@ -1292,40 +1316,41 @@ class multiBartGAT(PretrainedBartModel):
         return outputs, attns
 
     def sample(self, article, art_lens, extend_art, extend_vsize,
-                     nodes, nmask, node_num, feature_dict, node_lists, adjs,
-                     go, eos, unk, max_len, abstract, ml):
+               nodes, nmask, node_num, feature_dict, node_lists, adjs,
+               go, eos, unk, max_len, abstract, ml):
         """ greedy decode support batching"""
         batch_size = len(art_lens)
         vsize = self._embedding.num_embeddings
 
-                # 1. Load text to encoder
-        return_dict=False
+        # 1. Load text to encoder
+        return_dict = False
         encoder_outputs = self.encoder(
-                input_ids=article,
-                return_dict=return_dict,
+            input_ids=article,
+            return_dict=return_dict,
             output_attentions=True,
             output_hidden_states=True,
-            )
-        (last_hidden,hidden_states,attention,article_embedding) = encoder_outputs
+        )
+        (last_hidden, hidden_states, attention,
+         article_embedding) = encoder_outputs
         # 2. Use encoded text and graph input to from attention
-        self._gold =False
+        self._gold = False
         if self._gold:
             sw_mask = sw_mask
         else:
             sw_mask = None
 
         if self._mask_type == 'soft' or self._mask_type == 'none':
-            outputs = self._encode_graph(article_embedding, nodes, nmask, relations,
-                                              rmask, adjs, node_lists, node_mask=None,
-                                              nodefreq=feature_dict['node_freq'])
+            outputs = self._encode_graph(article_embedding, nodes, nmask, None,
+                                         None, adjs, node_lists, node_mask=None,
+                                         nodefreq=feature_dict['node_freq'])
         else:
-            outputs = self._encode_graph(article_embedding, nodes, nmask, relations, rmask, adjs, node_lists, sw_mask,
-                                       nodefreq=feature_dict['node_freq'])
-        
+            outputs = self._encode_graph(article_embedding, nodes, nmask, None, None, adjs, node_lists, sw_mask,
+                                         nodefreq=feature_dict['node_freq'])
+
         if self._hierarchical_attn:
             topics, masks, paras = outputs
         elif 'soft' in self._mask_type:
-            (topics,topics_len), masks = outputs
+            (topics, topics_len), masks = outputs
             paras = None
         else:
             topics = outputs
@@ -1338,13 +1363,15 @@ class multiBartGAT(PretrainedBartModel):
         # new_attention = graph_encoded.attentions
         # new_hidden_states = graph_encoded.hidden_states
 
+        topics = torch.cat([last_hidden, topics], dim=1)
+        
         tok = torch.LongTensor([go] * batch_size).to(article.device)
 
         outputs = []
         attns = []
         seqLogProbs = []
         for i in range(max_len):
-            
+
             decoder_outputs = self.decoder(
                 tok,
                 topics,
@@ -1352,12 +1379,13 @@ class multiBartGAT(PretrainedBartModel):
                 decoder_padding_mask=None,
                 decoder_causal_mask=None,
                 use_cache=False
-                )
-            
+            )
+
             new_last_hidden = decoder_outputs[0]
-            logits = F.linear(new_last_hidden, self.shared.weight, bias=self.final_logits_bias)
+            logits = F.linear(new_last_hidden, self.shared.weight,
+                              bias=self.final_logits_bias)
             attn_score = decoder_outputs[3]
-            
+
             # also save log probability
             logprob = F.log_softmax(logits, dim=1)
             #print('logit:', logit.size())
@@ -1367,7 +1395,7 @@ class multiBartGAT(PretrainedBartModel):
             #print('out:', tok)
             sampleProb = logprob.gather(1, tok)
             seqLogProbs.append(sampleProb)
-            
+
             #print('greedy tok:', tok.size())
             if i == 0:
                 unfinished = (tok != eos)
@@ -1392,11 +1420,11 @@ class multiBartGAT(PretrainedBartModel):
         return 0
 
     def decode(self, article, extend_art, extend_vsize, go, eos, unk, max_len):
-        batch_size = len(art_lens)
+        batch_size = article.shape[0]
         vsize = self._embedding.num_embeddings
 
         # 1. send to encode
-        last_hidden,hidden_states,attention = self.encoder(article)
+        last_hidden, hidden_states, attention = self.encoder(article)
 
         tok = torch.LongTensor([go] * batch_size).to(article.device)
 
@@ -1410,15 +1438,16 @@ class multiBartGAT(PretrainedBartModel):
                 decoder_padding_mask=None,
                 decoder_causal_mask=None,
                 use_cache=False
-                )
-            
+            )
+
             new_last_hidden = decoder_outputs[0]
-            logits = F.linear(new_last_hidden, self.shared.weight, bias=self.final_logits_bias)
+            logits = F.linear(new_last_hidden, self.shared.weight,
+                              bias=self.final_logits_bias)
             attn_score = decoder_outputs[3]
-            
+
             # Select out tokens
             tok = torch.max(logits, dim=1, keepdim=True)[1]
-            
+
             #print('greedy tok:', tok)
             if tok[0, 0].item() == eos:
                 break
@@ -1428,7 +1457,7 @@ class multiBartGAT(PretrainedBartModel):
                 tok[0, 0] = unk
 
         return outputs, attns
-    
+
     # def batched_beamsearch(self, article, art_lens,
     #                        extend_art, extend_vsize,
     #                        ninfo, rinfo, ext_ninfo,
@@ -1443,7 +1472,7 @@ class multiBartGAT(PretrainedBartModel):
     #         sw_mask = None
     #     batch_size = len(art_lens)
     #     vsize = self._embedding.num_embeddings
-        
+
     #     last_hidden,hidden_states,attention  = self.encoder(article)
 
     #     if self._mask_type == 'soft' or self._mask_type == 'none':
@@ -1468,12 +1497,12 @@ class multiBartGAT(PretrainedBartModel):
     #     ext_info = None
 
     #     mask = len_mask(art_lens, attention.device).unsqueeze(-2)
-        
+
     #     # graph_encoded = self.encoder(topics, attention_mask=masks)
     #     # new_last_hidden = graph_encoded.last_hidden_state
     #     # new_attention = graph_encoded.attentions
     #     # new_hidden_states = graph_encoded.hidden_states
-        
+
     #     ## decoding
     #     # init values
 
@@ -1503,11 +1532,11 @@ class multiBartGAT(PretrainedBartModel):
     #             decoder_causal_mask=None,
     #             use_cache=False
     #             )
-            
+
     #         new_last_hidden = decoder_outputs.last_hidden_state
     #         logits = F.linear(new_last_hidden, self.shared.weight, bias=self.final_logits_bias)
     #         attn_score = decoder_outputs.attention
-            
+
     #         # also save log probability
     #         logprob = F.log_softmax(logits, dim=1)
     #         next_token_logits = outputs.logits[:, -1, :]
