@@ -464,20 +464,27 @@ def convert_batch_gat_bart(tokenizer, max_src_len, batch):
             if word not in ext_word2id:
                 ext_word2id[word] = len(ext_word2id)
     src_exts = conver2id(unk, ext_word2id, sources)
-    if max_src_len > BERT_MAX_LEN:
-        new_sources = []
-        for source in sources:
-            if len(source) < BERT_MAX_LEN:
-                new_sources.append(source)
-            else:
-                new_sources.append(source[:BERT_MAX_LEN])
-                length = len(source) - BERT_MAX_LEN
-                i = 1
-                while length > 0:
-                    new_sources.append(source[i * stride:i * stride + BERT_MAX_LEN])
-                    i += 1
-                    length -= (BERT_MAX_LEN - stride)
-        sources = new_sources
+    # if max_src_len > BERT_MAX_LEN:
+    #     new_sources = []
+    #     for source in sources:
+    #         if len(source) < BERT_MAX_LEN:
+    #             new_sources.append(source)
+    #         else:
+    #             new_sources.append(source[:BERT_MAX_LEN])
+    #             length = len(source) - BERT_MAX_LEN
+    #             i = 1
+    #             while length > 0:
+    #                 new_sources.append(source[i * stride:i * stride + BERT_MAX_LEN])
+    #                 i += 1
+    #                 length -= (BERT_MAX_LEN - stride)
+    #     sources = new_sources
+    new_sources = []
+    for source in sources:
+        if len(source) < max_src_len:
+            new_sources.append(source)
+        else:
+            new_sources.append(source[:max_src_len])
+    sources = new_sources
     sources = conver2id(unk, word2id, sources)
     tar_ins = conver2id(unk, word2id, targets)
     targets = conver2id(unk, ext_word2id, targets)

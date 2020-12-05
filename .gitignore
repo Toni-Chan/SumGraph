@@ -6,3 +6,6 @@ checkpoints
 model/bak
 *.ckpt 
 *.pyc
+
+datasets-*
+datasets

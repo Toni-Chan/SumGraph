@@ -390,14 +390,12 @@ class BartEncoder(nn.Module):
         # check attention mask and invert
         if attention_mask is not None:
             attention_mask = invert_mask(attention_mask)
-        print(input_ids.size())
         inputs_embeds = self.embed_tokens(input_ids) * self.embed_scale
         embed_pos = self.embed_positions(input_ids)
         x = inputs_embeds + embed_pos
         x = self.layernorm_embedding(x)
         x = F.dropout(x, p=self.dropout, training=self.training)
         article_embedding = x
-        print(x.size())
         
         # B x T x C -> T x B x C
         x = x.transpose(0, 1)
@@ -1148,8 +1146,6 @@ class multiBartGAT(PretrainedBartModel):
         masks = []
         bs, n_node, n_word = nodes.size()
         nodes = nodes.view(bs, -1).unsqueeze(2).expand(bs, n_node * n_word, d_word)
-        print(nodes.size())
-        print(articles.size())
         nodes = articles.gather(1, nodes).view(bs, n_node, n_word, d_word).contiguous()
         nmask = nmask.unsqueeze(3).expand(bs, n_node, n_word, d_word)
         nodes = self.node_enc(nodes, mask=nmask)
