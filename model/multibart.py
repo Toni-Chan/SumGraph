@@ -1176,6 +1176,7 @@ class multiBartGAT(PretrainedBartModel):
 
         lm_logits = F.linear(final_state, self.shared.weight,
                              bias=self.final_logits_bias)
+        lm_logits = F.softmax(lm_logits, dim=-1)
         lm_logits = (lm_logits,)
         if 'soft' in self._mask_type:
             lm_logits += (masks,)
