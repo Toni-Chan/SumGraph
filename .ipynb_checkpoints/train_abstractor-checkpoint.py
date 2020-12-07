@@ -102,8 +102,8 @@ class MatchDataset_graph(CnnDmDataset):
     def __getitem__(self, i):
         js_data = super().__getitem__(i)
         art_sents, abs_sents, nodes, edges, subgraphs, paras = (
-            js_data['article'], js_data['abstract'], js_data[self.node_key], js_data[self.edge_key], js_data['subgraphs'], js_data['paragraph_merged'])
-#         art_sents = [' '.join(art_sents)]
+            js_data['article'], js_data['abstract'], js_data[self.node_key], js_data[self.edge_key], None, None)
+        art_sents = [' '.join(art_sents)]
         abs_sents = [' '.join(abs_sents)]
         return art_sents, abs_sents, nodes, edges, subgraphs, paras
 
@@ -240,7 +240,7 @@ def build_batchers_gat_bart(cuda, debug, gold_key, adj_type,
                        mask_type, num_worker=4, bart_model='bart-base'):
     print('adj_type:', adj_type)
     print('mask_type:', mask_type)
-    subgraph = True
+    subgraph = False
     docgraph = not subgraph
     tokenizer = BartTokenizer.from_pretrained(bart_model)
 
@@ -248,7 +248,7 @@ def build_batchers_gat_bart(cuda, debug, gold_key, adj_type,
         align = pickle.load(f)
 
     prepro = prepro_fn_gat_bart(tokenizer, align, args.max_art, args.max_abs, key=gold_key, adj_type=adj_type, docgraph=docgraph)
-    key = 'nodes'
+    key = 'nodes_pruned2'
     _coll_fn = coll_fn_gat(max_node_num=400)
     def sort_key(sample):
         src, target = sample[0], sample[1]

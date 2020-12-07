@@ -297,6 +297,8 @@ def prepro_fn_gat_bart(tokenizer, align, max_src_len, max_tgt_len, batch, node_m
         i = 0
         for sents in [' '.join(source_sent)]:
             sent_words = sents.split(' ')
+            if sent_words[0] not in align:
+                align[sent_words[0]]=1
             if len(sent_words) > 0:
                 order_match[i] = list(range(count, count + align[sent_words[0]]))
                 count += align[sent_words[0]]
@@ -304,6 +306,8 @@ def prepro_fn_gat_bart(tokenizer, align, max_src_len, max_tgt_len, batch, node_m
                 for word in sent_words[1:]:
                     new_word = ' ' + word # if use bpe
                     #new_word = word
+                    if new_word not in align:
+                        align[new_word]=1
                     order_match[i] = list(range(count, count + align[new_word]))
                     # test_order_match[new_word] = [count, count + align[new_word]]
                     count += align[new_word]

@@ -1036,14 +1036,6 @@ class BartDecoder(nn.Module):
         )
 
 
-
-
-        
-
-
-
-    
-    
 class multiBartGAT(PretrainedBartModel):
     def __init__(self, config: BartConfig, model_args):
         """Initialize the GAT-multi-BART model.
@@ -1052,7 +1044,6 @@ class multiBartGAT(PretrainedBartModel):
             config (BartConfig): BART parameters
             gat_args (Dict): GAT parameters
         """
-
         super().__init__(config)
 
         # BART settings
@@ -1061,67 +1052,37 @@ class multiBartGAT(PretrainedBartModel):
 
         self.encoder = BartEncoder(config, self.shared)
         self.decoder = BartDecoder(config, self.shared)
-        copy_from_node=False
-        
-        feat_emb_dim = config.d_model // 4
-#         self._copy = _CopyLinear(n_hidden, n_hidden, 2*emb_dim, side_dim, side_dim)
         gat_args = model_args
         # GAT settings
+        feat_emb_dim = config.d_model // 4
         graph_hsz = gat_args['graph_hsz']
 #         if 'nodefreq' in self._feature_banks:
 #             graph_hsz += feat_emb_dim
+
+        gat_args['graph_hsz'] = graph_hsz
+
+        self._graph_enc = subgraph_encode(gat_args)
 
         self.node_freq = gat_args['node_freq']
         if gat_args['node_freq']:
             graph_hsz += feat_emb_dim
             self._node_freq_embedding = nn.Embedding(
                 MAX_FREQ, feat_emb_dim, padding_idx=0)
+        gat_args['graph_hsz'] = graph_hsz
 
+        self.graph_enc = subgraph_encode(gat_args)
+        self.node_enc = MeanSentEncoder()
 
-        self._graph_layer_num = 1
-        self._graph_enc = nn.ModuleList([gat_encode(gat_args) for _ in range(self._graph_layer_num)])
-        self._node_enc = MeanSentEncoder()
-
-        
-        
-        
         mask_type = gat_args['mask_type']
         self._mask_type = mask_type
         if mask_type == 'encoder':
             self._graph_mask = node_mask(mask_type='gold')
         elif mask_type == 'soft':
-            self._graph_mask = nn.ModuleList([node_mask(mask_type=mask_type, emb_dim=graph_hsz*(i+1)) for i in range(self._graph_layer_num+1)])
+            self._graph_mask = node_mask(
+                mask_type=mask_type, emb_dim=graph_hsz)
         else:
             self._graph_mask = node_mask(mask_type='none')
-        
-        self._gold = False
-        self._copy_bank = 'node'
 
-
-        # node attention
-#         self._attn_s1 = nn.Parameter(torch.Tensor(n_hidden, n_hidden))
-#         self._attns_wm = nn.Parameter(torch.Tensor(graph_hsz, n_hidden))
-#         self._attns_wq = nn.Parameter(torch.Tensor(n_hidden, n_hidden))
-#         self._attns_v = nn.Parameter(torch.Tensor(n_hidden))
-#         init.xavier_normal_(self._attns_wm)
-#         init.xavier_normal_(self._attns_wq)
-#         init.xavier_normal_(self._attn_s1)
-#         init.uniform_(self._attns_v, -INIT, INIT)
-#         self._graph_proj = nn.Linear(graph_hsz, graph_hsz)
-#         self._projection_decoder = nn.Sequential(
-#                 nn.Linear(3 * n_hidden, n_hidden),
-#                 nn.Tanh(),
-#                 nn.Linear(n_hidden, emb_dim, bias=False)
-#             )
-#         self._decoder_supervision = False
-
-#         self._copy_from_node = copy_from_node
-#         self._attn_copyx = None
-#         self._attn_copyn = None
-#         self._attn_copyh = None
-#         self._attn_copyv = None
-
-        self._graph_proj = nn.Linear(graph_hsz, graph_hsz)
         self.register_buffer("final_logits_bias", torch.zeros(
             (1, self.shared.num_embeddings)))
         self.init_weights()
@@ -1143,10 +1104,7 @@ class multiBartGAT(PretrainedBartModel):
         Returns:
             [type]: [description]
         """
-
-            
-        (nodes, nmask, node_num, sw_mask, feature_dict) = ninfo
-
+        (nodes, nmask, node_num, sw_mask, feature_dict, node_lists) = ninfo
         (relations, rmask, triples, adjs) = rinfo
 
         decoder_input_ids, decoder_padding_mask, causal_mask = _prepare_bart_decoder_inputs(
@@ -1175,20 +1133,22 @@ class multiBartGAT(PretrainedBartModel):
         else:
             sw_mask = None
 
-        if self._mask_type == 'soft':
-            topics, masks = self._encode_graph(article_embedding, nodes, nmask, relations,
-                                              rmask, triples, adjs, node_num, node_mask=None, nodefreq=feature_dict['node_freq'])
+        if self._mask_type == 'soft' or self._mask_type == 'none':
+            outputs = self._encode_graph(article_embedding, nodes, nmask, relations,
+                                         rmask, adjs, node_lists, node_mask=None,
+                                         nodefreq=feature_dict['node_freq'])
         else:
-            topics = self._encode_graph(article_embedding, nodes, nmask, relations, rmask, triples, adjs, node_num, sw_mask, nodefreq=feature_dict['node_freq'])
+            outputs = self._encode_graph(article_embedding, nodes, nmask, relations, rmask, adjs, node_lists, sw_mask,
+                                         nodefreq=feature_dict['node_freq'])
 
-#         if self._hierarchical_attn:
-#             topics, masks, paras = outputs
-#         elif 'soft' in self._mask_type:
-#             (topics, topics_len), masks = outputs
-#             paras = None
-#         else:
-#             topics = outputs
-#             paras = None
+        if self._hierarchical_attn:
+            topics, masks, paras = outputs
+        elif 'soft' in self._mask_type:
+            (topics, topics_len), masks = outputs
+            paras = None
+        else:
+            topics = outputs
+            paras = None
         ext_info = None
 
         mask = len_mask(art_lens, attention[-1].device).unsqueeze(-2)
@@ -1222,55 +1182,41 @@ class multiBartGAT(PretrainedBartModel):
             lm_logits += (masks,)
         return lm_logits
 
-    def _encode_graph(self, articles, nodes, nmask, relations, rmask, triples, adjs, node_num, node_mask=None, nodefreq=None):
+    def _encode_graph(self, articles, nodes, nmask, relations, rmask, batch_adjs, node_lists, node_mask=None, nodefreq=None):
         d_word = articles.size(-1)
 
         masks = []
         bs, n_node, n_word = nodes.size()
-        nodes = nodes.view(bs, -1).unsqueeze(2).expand(bs, n_node * n_word, d_word)
-        nodes = articles.gather(1, nodes).view(bs, n_node, n_word, d_word).contiguous()
+        nodes = nodes.view(bs, -1).unsqueeze(2).expand(bs,
+                                                       n_node * n_word, d_word)
+        nodes = articles.gather(1, nodes).view(
+            bs, n_node, n_word, d_word).contiguous()
         nmask = nmask.unsqueeze(3).expand(bs, n_node, n_word, d_word)
-        nodes = self._node_enc(nodes, mask=nmask)
-    
-        nodes_no_mask = nodes
+        nodes = self.node_enc(nodes, mask=nmask)
+        if self.node_freq:
+            assert nodefreq is not None
+            nodefreq = self._node_freq_embedding(nodefreq)
+            nodes = torch.cat([nodes, nodefreq], dim=-1)
         if self._mask_type == 'encoder':
             nodes, node_mask = self._graph_mask(nodes, node_mask)
         elif self._mask_type == 'soft':
-            nodes, node_mask = self._graph_mask[0](nodes, _input=nodes)
+            nodes, node_mask = self._graph_mask(nodes, _input=nodes)
             masks.append(node_mask.squeeze(2))
-        # print('node_mask:', node_mask[0:2, :])
-        # print('n_mask:', nmask[0:2, :])
-        # print('triples:', triples[0:2])
-        init_nodes = nodes
 
- 
-        edges = nodes
+        # topics, topic_length = self._graph_enc(batch_adjs, nodes, node_lists)
+        topics, topic_length = self.graph_enc(batch_adjs, nodes, node_lists)
 
-        for i_layer in range(self._graph_layer_num):
-            triple_reps = nodes
+        results = ((topics, topic_length),)
 
-            #print('before layer {}, nodes: {}'.format(i_layer, nodes[0:2,:,:10]))
-
-            nodes, edges = self._graph_enc[i_layer](adjs, triple_reps, nodes, node_num, edges)
-            if self._mask_type == 'encoder':
-                nodes, node_mask = self._graph_mask(nodes, node_mask)
-            elif self._mask_type == 'soft':
-                if i_layer == 0:
-                    _input = nodes_no_mask
-                _input = torch.cat([nodes, nodes_no_mask], dim=-1)
-                original_nodes = nodes
-                nodes, node_mask = self._graph_mask[i_layer+1](nodes, _input=_input)
-                masks.append(node_mask.squeeze(2))
-                nodes_no_mask = torch.cat([nodes_no_mask, original_nodes], dim=-1)
-
-        # add initial reps
-        nodes = self._graph_proj(init_nodes) + nodes
         if 'soft' in self._mask_type:
-            return nodes, masks
-        else:
-            return nodes
+            results += (masks,)
 
-        
+        return results
+        # if 'soft' in self._mask_type:
+        #     return (topics, topic_length), masks
+        # else:
+        #     return (topics, topic_length)
+
     def greedy(self, article, art_lens, extend_art, extend_vsize,
                nodes, nmask, node_num, feature_dict, node_lists, adjs,
                go, eos, unk, max_len, tar_in):

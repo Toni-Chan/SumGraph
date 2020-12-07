@@ -297,6 +297,8 @@ def prepro_fn_gat_bart(tokenizer, align, max_src_len, max_tgt_len, batch, node_m
         i = 0
         for sents in [' '.join(source_sent)]:
             sent_words = sents.split(' ')
+            if sent_words[0] not in align:
+                align[sent_words[0]]=1
             if len(sent_words) > 0:
                 order_match[i] = list(range(count, count + align[sent_words[0]]))
                 count += align[sent_words[0]]
@@ -304,6 +306,8 @@ def prepro_fn_gat_bart(tokenizer, align, max_src_len, max_tgt_len, batch, node_m
                 for word in sent_words[1:]:
                     new_word = ' ' + word # if use bpe
                     #new_word = word
+                    if new_word not in align:
+                        align[new_word]=1
                     order_match[i] = list(range(count, count + align[new_word]))
                     # test_order_match[new_word] = [count, count + align[new_word]]
                     count += align[new_word]
@@ -464,20 +468,27 @@ def convert_batch_gat_bart(tokenizer, max_src_len, batch):
             if word not in ext_word2id:
                 ext_word2id[word] = len(ext_word2id)
     src_exts = conver2id(unk, ext_word2id, sources)
-    if max_src_len > BERT_MAX_LEN:
-        new_sources = []
-        for source in sources:
-            if len(source) < BERT_MAX_LEN:
-                new_sources.append(source)
-            else:
-                new_sources.append(source[:BERT_MAX_LEN])
-                length = len(source) - BERT_MAX_LEN
-                i = 1
-                while length > 0:
-                    new_sources.append(source[i * stride:i * stride + BERT_MAX_LEN])
-                    i += 1
-                    length -= (BERT_MAX_LEN - stride)
-        sources = new_sources
+    # if max_src_len > BERT_MAX_LEN:
+    #     new_sources = []
+    #     for source in sources:
+    #         if len(source) < BERT_MAX_LEN:
+    #             new_sources.append(source)
+    #         else:
+    #             new_sources.append(source[:BERT_MAX_LEN])
+    #             length = len(source) - BERT_MAX_LEN
+    #             i = 1
+    #             while length > 0:
+    #                 new_sources.append(source[i * stride:i * stride + BERT_MAX_LEN])
+    #                 i += 1
+    #                 length -= (BERT_MAX_LEN - stride)
+    #     sources = new_sources
+    new_sources = []
+    for source in sources:
+        if len(source) < max_src_len:
+            new_sources.append(source)
+        else:
+            new_sources.append(source[:max_src_len])
+    sources = new_sources
     sources = conver2id(unk, word2id, sources)
     tar_ins = conver2id(unk, word2id, targets)
     targets = conver2id(unk, ext_word2id, targets)
