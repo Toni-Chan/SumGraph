@@ -52,7 +52,7 @@ class MultiHeadAttention_old(nn.Module):
         # calculate QK^T
         attention = torch.matmul(Q, K.transpose(1, 2))
         # normalize with sqrt(dk)
-        attention = attention / torch.sqrt(self._key_dim).cuda()
+        attention = attention / torch.sqrt(self._key_dim).to(query.device)
 
         if mask is not None:
             mask = mask.repeat(self._h,1,1)
@@ -120,10 +120,10 @@ class MultiHeadAttention(nn.Module):
         # calculate QK^T
         attention = torch.matmul(Q, K.transpose(1, 2))
         # normalize with sqrt(dk)
-        attention = attention / torch.sqrt(self._key_dim).cuda()
+        attention = attention / torch.sqrt(self._key_dim).to(query.device)
 
         if mask is not None:
-            mask = mask.unsqueeze(0).repeat(self._h,1,1)
+            mask = mask.unsqueeze(0).repeat(self._h,1,1).to(query.device)
             attention.masked_fill_(mask,-float('inf'))
         attention = F.softmax(attention, dim=-1)
         # apply dropout
@@ -247,7 +247,7 @@ class graph_encode(nn.Module):
                 lens = [len(x) for x in adj]
                 m = max(lens)
                 mask = torch.arange(0,m).unsqueeze(0).repeat(len(lens),1).long()
-                mask = (mask <= torch.LongTensor(lens).unsqueeze(1)).cuda()
+                mask = (mask <= torch.LongTensor(lens).unsqueeze(1)).to(adjs.device)
                 mask = (mask == 0).unsqueeze(1)
             else:
                 mask = (adj == 0).unsqueeze(1)
@@ -276,7 +276,7 @@ class graph_encode(nn.Module):
         gents = torch.stack(gents,0)
         elens = torch.LongTensor(elens)
         emask = torch.arange(0,gents.size(1)).unsqueeze(0).repeat(gents.size(0),1).long()
-        emask = (emask <= elens.unsqueeze(1)).cuda()
+        emask = (emask <= elens.unsqueeze(1)).to(adjs.device)
         glob = torch.stack(glob,0)
         if math.isnan(gents.sum()):
             for gent in gents:
@@ -477,7 +477,7 @@ class subgraph_encode(nn.Module):
             for _sid, adj in enumerate(adjs):
                 if len(adj) > 0:
                     node_list = node_lists[_bid][_sid]
-
+                    
                     subgraph_nodes = nodes[_bid, node_list, :]
 
                     mask = (adj == 0)

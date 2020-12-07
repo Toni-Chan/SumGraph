@@ -244,7 +244,7 @@ class Abstractor(object):
         return dec_sents
 
 class BeamAbstractorGAT(object):
-    def __init__(self, abs_dir, max_len=100, cuda=True, min_len=0, reverse=True, key='summary_worthy', docgraph=True):
+    def __init__(self, abs_dir, max_len=100, cuda=True, min_len=0, reverse=True, key='summary_worthy'):
         
         abs_meta = pickle.load(open(join(abs_dir, 'meta.json'),'rb'))# json.load(open(join(abs_dir, 'meta.json')))
         assert abs_meta['net'] == 'base_abstractor'
@@ -253,11 +253,7 @@ class BeamAbstractorGAT(object):
         word2id = pkl.load(open(join(abs_dir, 'vocab.pkl'), 'rb'))
         print('abs args:', abs_args)
         abstractor = multiBartGAT(**abs_args)
-        
-#         if docgraph:
-#             abstractor = CopySummGAT(**abs_args)
-#         else:
-#             abstractor = CopySummParagraph(**abs_args)
+
         abstractor.load_state_dict(abs_ckpt)
         self._device = torch.device('cuda' if cuda else 'cpu')
         self._cuda = cuda
@@ -270,31 +266,26 @@ class BeamAbstractorGAT(object):
         self._adj_type = self._net._adj_type
         self._mask_type = self._net._mask_type
         self._key = key
-        self._copy_from_node = self._net._copy_from_node
-        self._docgraph = docgraph
-        self._bert = abstractor._bert
+        #self._copy_from_node = self._net._copy_from_node
 
-        if self._bert:
-            self._bert_length = abstractor._bert_max_length
-            self._tokenizer = abstractor._bert_model._tokenizer
-            try:
-                with open('/data/luyang/process-nyt/bert_tokenizaiton_aligns/robertaalign-base-cased.pkl', 'rb') as f:
-                    self._align = pickle.load(f)
-            except FileNotFoundError:
-                with open('/media/toni/Data/Capstone/baselines/GraphAugmentedSum/datasets-2/finished_files_openie_3/roberta-base-align.pkl', 'rb') as f:
-                    self._align = pickle.load(f)
-            # try:
-            #     with open('/data/luyang/process-cnn-dailymail/bert_tokenizaiton_aligns/robertaalign-base-cased.pkl', 'rb') as f:
-            #         align2 = pickle.load(f)
-            # except FileNotFoundError:
-            #     with open('/media/toni/Data/Capstone/baselines/GraphAugmentedSum/datasets-2/finished_files_openie_3/roberta-base-align.pkl', 'rb') as f:
-            #         align2 = pickle.load(f)
-            # self._align.update(align2)
-            self._end = self._tokenizer.eos_token_id
-            self._unk = self._tokenizer.unk_token_id
-        else:
-            self._end = END
-            self._unk = UNK
+        self._docgraph = False
+
+        self._bert_length = abstractor._bert_max_length
+        self._tokenizer = abstractor._bert_model._tokenizer
+        try:
+            DATA_DIR = os.environ['DATA']
+            with open(os.path.join(DATA_DIR, "roberta-base-align.pkl"), 'rb') as f:
+                self._align = pickle.load(f)
+
+        # try:
+        #     with open('/data/luyang/process-cnn-dailymail/bert_tokenizaiton_aligns/robertaalign-base-cased.pkl', 'rb') as f:
+        #         align2 = pickle.load(f)
+        # except FileNotFoundError:
+        #     with open('/media/toni/Data/Capstone/baselines/GraphAugmentedSum/datasets-2/finished_files_openie_3/roberta-base-align.pkl', 'rb') as f:
+        #         align2 = pickle.load(f)
+        # self._align.update(align2)
+        self._end = self._tokenizer.eos_token_id
+        self._unk = self._tokenizer.unk_token_id
 
 
     def __call__(self, batch, beam_size=5, diverse=1.0):

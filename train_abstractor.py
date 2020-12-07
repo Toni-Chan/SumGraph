@@ -12,6 +12,7 @@ from torch import optim
 from torch.nn import functional as F
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
+from torch.nn.parallel import DistributedDataParallel
 
 # training pipeline. no need to change
 from training import get_basic_grad_fn, basic_validate
@@ -32,8 +33,13 @@ from training import multitask_validate
 
 from utils import PAD, UNK, START, END
 from utils import make_vocab, make_embedding
+from utils import init_gpu_params
 from transformers import BartTokenizer, BartConfig
 import pickle
+
+import logging
+logging.basicConfig(level=logging.ERROR)
+logger = logging.getLogger(__name__)
 
 # NOTE: bucket size too large may sacrifice randomness,
 #       to low may increase # of PAD tokens
@@ -43,6 +49,8 @@ try:
     DATA_DIR = os.environ['DATA']
 except KeyError:
     print('please use environment variable to specify data directories')
+
+
 
 class MatchDataset(CnnDmDataset):
     """ single article sentence -> single abstract sentence
@@ -103,7 +111,7 @@ class MatchDataset_graph(CnnDmDataset):
         js_data = super().__getitem__(i)
         art_sents, abs_sents, nodes, edges, subgraphs, paras = (
             js_data['article'], js_data['abstract'], js_data[self.node_key], js_data[self.edge_key], js_data['subgraphs'], js_data['paragraph_merged'])
-#         art_sents = [' '.join(art_sents)]
+        #         art_sents = [' '.join(art_sents)]
         abs_sents = [' '.join(abs_sents)]
         return art_sents, abs_sents, nodes, edges, subgraphs, paras
 
@@ -117,16 +125,16 @@ def configure_bart_gat(vocab_size, emb_dim, n_encoder, n_decoder, drop_encoder, 
                   static_pos_emb=False):
     
     net_args = BartConfig.from_pretrained('facebook/bart-base')
-#     (
-#         vocab_size=vocab_size,
-#         d_model=emb_dim,
-#         encoder_layers=n_encoder,
-#         decoder_layers=n_decoder,
-#         encoder_layerdrop=drop_encoder,
-#         decoder_layerdrop=drop_decoder,
-#         static_position_embedding=static_pos_emb,
-#         max_position_embeddings=max_art,
-#     )
+    #     (
+    #         vocab_size=vocab_size,
+    #         d_model=emb_dim,
+    #         encoder_layers=n_encoder,
+    #         decoder_layers=n_decoder,
+    #         encoder_layerdrop=drop_encoder,
+    #         decoder_layerdrop=drop_decoder,
+    #         static_position_embedding=static_pos_emb,
+    #         max_position_embeddings=max_art,
+    #     )
     
     net = multiBartGAT.from_pretrained('facebook/bart-base',model_args=gat_args)
     
@@ -279,17 +287,20 @@ def build_batchers_gat_bart(cuda, debug, gold_key, adj_type,
     return train_batcher, val_batcher, tokenizer.encoder
 
 def main(args):
-    import logging
-    logging.basicConfig(level=logging.ERROR)
+    
     args.gat=True
     args.bart=True
+    # multi_gpu_settings
+    init_gpu_params(args)
+
     # create data batcher, vocabulary
 
     # batcher
     train_batcher, val_batcher, word2id = build_batchers_gat_bart(
                                                             args.cuda, args.debug, args.gold_key, args.adj_type,
                                                             args.mask_type,
-                                                            num_worker=args.num_worker, bart_model=args.bartmodel)
+                                                            num_worker=args.num_worker, bart_model=args.bartmodel,
+                                                           )
 
     # make net
     _args = {}
@@ -302,20 +313,29 @@ def main(args):
     _args['mask_type'] = args.mask_type
     _args['node_freq'] = args.node_freq
 
+    training_group = []
+    
     net, net_args, gat_args = configure_bart_gat(args.vsize, args.emb_dim, args.n_encoder, args.n_decoder, 
-                                      args.drop_encoder, args.drop_decoder, args.load_from, _args, 
-                                      args.max_art, args.static_pos_emb)
+                                    args.drop_encoder, args.drop_decoder, args.load_from, _args, 
+                                    args.max_art, args.static_pos_emb)
 
     # configure training setting
     if 'soft' in args.mask_type and args.gat:
         criterion, train_params = configure_training_multitask(
             'adam', args.lr, args.clip, args.decay, args.batch, args.mask_type,
-            args.bart
+            args.bart, 
         )
     else:
         criterion, train_params = configure_training(
         'adam', args.lr, args.clip, args.decay, args.batch, args.bart
         )
+
+    # do we need to change criterion?
+
+    if args.cuda:
+        net = net.cuda()
+        if args.multi_gpu: 
+            net = DistributedDataParallel(net, device_ids=[i for i in range(args.n_gpu)])
 
     # save experiment setting
     if not exists(args.path):
@@ -328,20 +348,15 @@ def main(args):
     meta['traing_params'] = train_params
     with open(join(args.path, 'meta.json'), 'wb') as f:
         pickle.dump(meta,f)
-#     with open(join(args.path, 'meta.json'), 'w') as f:
-#         json.dump(meta, f, indent=4)
-
-    # prepare trainer
-    if args.cuda:
-        net = net.cuda()
-
+    #     with open(join(args.path, 'meta.json'), 'w') as f:
+    #         json.dump(meta, f, indent=4)
 
     if 'soft' in args.mask_type and args.gat:
         val_fn = multitask_validate(net, criterion)
     else:
         val_fn = basic_validate(net, criterion)
     grad_fn = get_basic_grad_fn(net, args.clip)
-#     print(net._embedding.weight.requires_grad)
+    #     print(net._embedding.weight.requires_grad)
 
     optimizer = optim.AdamW(net.parameters(), **train_params['optimizer'][1])
     #optimizer = optim.Adagrad(net.parameters(), **train_params['optimizer'][1])
@@ -450,15 +465,19 @@ if __name__ == '__main__':
     parser.add_argument('--gpu_id', type=int, default=0, help='gpu id if only 1 gpu is used')
     parser.add_argument('--bartmodel', action='store', default='facebook/bart-base', type=str,
                         help='model type')
-    
+
+    parser.add_argument('--multi_gpu', action='store_true', help='multi-gpu training')
+    parser.add_argument('--n_gpu', type=int, default=1, help='number of gpus')
+    parser.add_argument("--local_rank", type=int, default=-1, help="Distributed training - Local rank")
+
     args = parser.parse_args()
     if args.debug:
         BUCKET_SIZE = 64
     args.topic_flow_model = False
     args.cuda = torch.cuda.is_available() and not args.no_cuda
-    if args.cuda:
+    if args.cuda and args.n_gpu == 1:
         torch.cuda.set_device(args.gpu_id)
 
-    args.n_gpu = 1
+    assert not (args.multi_gpu and args.n_gpu == 1)
 
     main(args)

@@ -10,7 +10,7 @@ from .attention import prob_normalize, prob_normalize_sigmoid
 from .myownutils import get_sinusoid_encoding_table
 import math
 from model.graph_enc import graph_encode, gat_encode, node_mask, subgraph_encode
-from pytorch_transformers import BertTokenizer, BertModel, BertConfig
+from transformers import BertTokenizer, BertModel, BertConfig
 from transformers import RobertaTokenizer
 from .util import pad_batch_tensorize
 # from model.roberta import RobertaEmbedding
