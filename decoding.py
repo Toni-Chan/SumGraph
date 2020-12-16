@@ -897,7 +897,7 @@ class BeamAbstractor_cnn(Abstractor):
 def _process_beam(id2word, beam, art_sent, unk=UNK):
     def process_hyp(hyp):
         seq = []
-        print(hyp)
+        if not hasattr(hyp,'attns'): return hyp   # why do we have duplicate beams?
         for i, attn in zip(hyp.sequence[1:], hyp.attns[:-1]):
             if i == unk:
                 copy_word = art_sent[max(range(len(art_sent)),

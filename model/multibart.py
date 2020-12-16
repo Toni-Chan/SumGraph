@@ -1599,6 +1599,7 @@ class multiBartGAT(PretrainedBartModel):
             # print(len(all_beams))
             
             batch_i = 0
+
             for i, (beam, finished) in enumerate(zip(all_beams,
                                                      finished_beams)):
                 if not beam:
