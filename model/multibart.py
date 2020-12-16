@@ -1507,9 +1507,6 @@ class multiBartGAT(PretrainedBartModel):
 
         mask = len_mask(art_lens, attention[-1].device).unsqueeze(-2)
 
-        # all_attention = (attention, mask, extend_art, extend_vsize)
-        # attention = all_attention
-
         all_beams = [bs.init_beam(go, None)
                      for i in range(batch_size)]
         if self._hierarchical_attn:
@@ -1533,27 +1530,13 @@ class multiBartGAT(PretrainedBartModel):
         for t in range(max_len):
             toks = []
             
-            # pack beams
+            # pack beams, concatenate previous input together
             for beam in filter(bool, all_beams):
                 token = bs.pack_beam(beam, article.device)
                 toks.append(token)
             token = torch.stack(toks, dim=0)
             token.masked_fill_(token >= vsize, unk)
-            # # filtered_nodes = torch.stack([all_nodes[i][0] for i, _beam in enumerate(all_beams) if _beam != []], dim=0)
-            # # filtered_node_num = [all_nodes[i][1] for i, _beam in enumerate(all_beams) if _beam != []]
-            # if sw_mask is not None:
-            #     filtered_sw_mask = torch.stack([all_nodes[i][2] for i, _beam in enumerate(all_beams) if _beam != []], dim=0)
-            # else:
-            #     filtered_sw_mask = None
-            # if self._hierarchical_attn:
-            #     filtered_paras = [torch.stack([all_paras[i][0] for i, _beam in enumerate(all_beams) if _beam != []], dim=0),
-            #                       [all_paras[i][1] for i, _beam in enumerate(all_beams) if _beam != []],
-            #                       torch.stack([all_paras[i][2] for i, _beam in enumerate(all_beams) if _beam != []],dim=0),
-            #                       max_subgraph_node_num]
-            # else:
-            #     filtered_paras = None
 
-            # filtered_ext_info = None
             if t < min_len:
                 force_not_stop = True
             else:
@@ -1561,17 +1544,14 @@ class multiBartGAT(PretrainedBartModel):
 
             # send beam
 
-            # topk, lp, states, attn_score = self._decoder.topk_step(
-            #     token, states, attention, beam_size, filtered_nodes, filtered_node_num,
-            #     max_node_num=max_node_num, side_mask=filtered_sw_mask,  force_not_stop=force_not_stop, filtered_ext_info=filtered_ext_info, filtered_para_info=filtered_paras, eos=eos)
-            
             topics_input_expanded = topics_input.unsqueeze(1).expand(-1, token.shape[1], -1, -1) \
-                                    .reshape(batch_size * token.shape[1], -1, topics_input.shape[-1])
-            token = token.view(batch_size * token.shape[1], -1)
+                                    .reshape(batch_size * token.shape[1], -1, topics_input.shape[-1])  
+                                    # convert hidden input to (batch_size * beam_size, input_len, hidden_len)
+            token = token.view(batch_size * token.shape[1], -1)  # convert to (batch_size * beam_size, seq_len)
 
             decoder_outputs = self.decoder(
                 token,
-                topics_input_expanded,
+                topics_input_expanded,  # transformer decoding should use static hidden state input
                 encoder_padding_mask=None,
                 decoder_padding_mask=None,
                 decoder_causal_mask=None,
@@ -1579,29 +1559,31 @@ class multiBartGAT(PretrainedBartModel):
                 output_hidden_states=True,
             )
 
-            final_state = decoder_outputs[0]
-            attn_score = decoder_outputs[-1][-1] # cross_attention at last layer 
-            attention = attn_score.sum(dim=1)
-            # x, next_cache, all_hidden_states, all_self_attns, all_cross_attentions
+            final_state = decoder_outputs[0] #final_state (batch_size * beam_size, seq_len, final_hidden_size)
+            attn_score = decoder_outputs[-1][-1] # cross_attention at last layer (batch_size * beam_size, attn_head, seq_len, input_len)
+            attention = attn_score.sum(dim=1) # merge attn scores of all attention to one. 
+            # decoder_outputs [x, next_cache, all_hidden_states, all_self_attns, all_cross_attentions]
 
-            
 
             lm_logits = F.linear(final_state[:,-1,:], self.shared.weight,
-                                bias=self.final_logits_bias)
-            lm_logits = F.softmax(lm_logits, dim=-1).contiguous().reshape(batch_size, -1, lm_logits.shape[-1])
-            attention = attention[:,-1,:].reshape(batch_size, -1, attention.shape[-1])
-
+                                bias=self.final_logits_bias) 
+                                # convert to logits using the word embedding
+            lm_logits = F.softmax(lm_logits, dim=-1).contiguous().reshape(batch_size, -1, lm_logits.shape[-1]) 
+            # reshape to (batch_size, beam_size, token_num)
+            attention = attention[:,-1,:].reshape(batch_size, -1, attention.shape[-1]) 
+            # take only the last token's attention and reshape to (batch_size, beam_size, seq_len)
             
-            lp, topk = lm_logits.topk(k=beam_size, dim=-1)
+            lp, topk = lm_logits.topk(k=beam_size, dim=-1) # take top_k labels
 
-            # print(final_state.shape, attn_score.shape, attention.shape, art_lens, lm_logits.shape)
-            # print(lp.shape, topk.shape)
+            print(final_state.shape, attn_score.shape, attention.shape, art_lens, lm_logits.shape)
+            print(lp.shape, topk.shape)
             # print(len(all_beams))
-            
+
             batch_i = 0
 
             for i, (beam, finished) in enumerate(zip(all_beams,
                                                      finished_beams)):
+                # for each item in the batch:
                 if not beam:
                     continue
                 finished, new_beam = bs.next_search_beam(
@@ -1610,9 +1592,9 @@ class multiBartGAT(PretrainedBartModel):
                     None,
                     attention[batch_i, :, :],
                     diverse
-                )
+                )   # expand beams
                 batch_i += 1
-                if len(finished) >= beam_size:
+                if len(finished) >= beam_size: # dealing with finished beams
                     all_beams[i] = []
                     outputs[i] = finished[:beam_size]
                     # exclude finished inputs
@@ -1620,7 +1602,7 @@ class multiBartGAT(PretrainedBartModel):
                              if o is None]
                     ind = [j for j, o in enumerate(outputs) if o is None]
                     ind = torch.LongTensor(ind).to(attention.device)
-                    extend_art = map(
+                    attention, extend_art = map(
                         lambda v: v.index_select(dim=0, index=ind),
                         [attention, extend_art]
                     )
@@ -1639,3 +1621,7 @@ class multiBartGAT(PretrainedBartModel):
                 if o is None:
                     outputs[i] = (f+b)[:beam_size]
         return outputs
+
+
+        # Problems now: 1. we have duplicate beams in the sequence 
+        #               2. Output for all articles are the same and is not recognizable
