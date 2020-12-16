@@ -138,17 +138,14 @@ def decodeGAT(save_path, abs_dir, split, batch_size, max_len, cuda, min_len):
         abstractor = BeamAbstractorGAT(abs_dir, max_len, cuda, min_len, reverse=args.reverse)
 
 
-    bert = abstractor._bert
-    if bert:
-        tokenizer = abstractor._tokenizer
-        print('use bert')
-        logging.basicConfig(level=logging.ERROR)
+    tokenizer = abstractor._tokenizer
+    logging.basicConfig(level=logging.ERROR)
 
     # setup loader
     def coll(batch):
         articles, nodes, edges, subgraphs, paras = list(filter(bool, list(zip(*batch))))
         return (articles, nodes, edges, subgraphs, paras)
-    dataset = AbsDecodeDatasetGAT(split)
+    dataset = AbsDecodeDatasetGAT(split, docgraph=False)
 
     n_data = len(dataset)
     loader = DataLoader(
@@ -156,18 +153,22 @@ def decodeGAT(save_path, abs_dir, split, batch_size, max_len, cuda, min_len):
         collate_fn=coll
     )
 
-    os.makedirs(save_path)
+    try: os.makedirs(save_path)
+    except: pass
     # prepare save paths and logs
     dec_log = {}
     dec_log['abstractor'] = (None if abs_dir is None
-                             else json.load(open(join(abs_dir, 'meta.json'))))
+                             else pickle.load(open(join(abs_dir, 'meta.json'),'rb')))
+
+    print(dec_log['abstractor'])
     dec_log['rl'] = False
     dec_log['split'] = split
     dec_log['beam'] = 5  # greedy decoding only
     beam_size = 5
-    with open(join(save_path, 'log.json'), 'w') as f:
-        json.dump(dec_log, f, indent=4)
-    os.makedirs(join(save_path, 'output'))
+    with open(join(save_path, 'log.json'), 'wb') as f:
+        pickle.dump(dec_log, f)
+    try: os.makedirs(join(save_path, 'output'))
+    except: pass
 
     # Decoding
     i = 0
@@ -176,10 +177,7 @@ def decodeGAT(save_path, abs_dir, split, batch_size, max_len, cuda, min_len):
         for i_debug, raw_batch in enumerate(loader):
             raw_article_batch, nodes, edges, paras, subgraphs = raw_batch
             raw_sents_batch = [[' '.join(article)] for article in raw_article_batch]
-            if bert:
-                tokenized_article_batch = map(tokenize_keepcase(args.max_input), raw_sents_batch)
-            else:
-                tokenized_article_batch = map(tokenize(args.max_input), raw_sents_batch)
+            tokenized_article_batch = map(tokenize_keepcase(args.max_input), raw_sents_batch)
             # tokenized_article_batch = map(tokenize(args.max_input), raw_sents_batch)
             ext_arts = []
             ext_inds = []
@@ -192,11 +190,10 @@ def decodeGAT(save_path, abs_dir, split, batch_size, max_len, cuda, min_len):
             dec_outs = rerank_mp(all_beams, beam_inds)
 
             for dec_out in dec_outs:
-                if bert:
-                    text = ''.join(' '.join(dec_out).split(' '))
-                    dec_out = bytearray([tokenizer.byte_decoder[c] for c in text]).decode('utf-8',
-                                                                                          errors=tokenizer.errors)
-                    dec_out = [dec_out]
+                text = ''.join(' '.join(dec_out).split(' '))
+                dec_out = bytearray([tokenizer.byte_decoder[c] for c in text]).decode('utf-8',
+                                                                                        errors=tokenizer.errors)
+                dec_out = [dec_out]
 
                 dec_out = sent_tokenize(' '.join(dec_out))
                 ext = [sent.split(' ') for sent in dec_out]

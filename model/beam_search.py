@@ -8,7 +8,7 @@ import torch
 
 
 class _Hypothesis(object):
-    def __init__(self, sequence, logprob, hists, attns=[], coverage=None):
+    def __init__(self, sequence, logprob, hists=None, attns=[], coverage=None):
         """
         seqence: list of int tokens
         logprob: current log probability
@@ -64,32 +64,32 @@ def create_beam(tok, lp, hists):
 
 def pack_beam(hyps, device):
     """pack a list of hypothesis to decoder input batches"""
-    token = torch.LongTensor([h.sequence[-1] for h in hyps])
+    token = torch.LongTensor([h.sequence for h in hyps])
 
-    states = torch.stack([hyp.hists for hyp in hyps], dim=0)
+    # states = torch.stack([hyp.hists for hyp in hyps], dim=0)
     token = token.to(device)
-    states = states.to(device)
-    return token, states
+    # states = states.to(device)
+    return token
 
+
+# def next_search_beam(beam, beam_size, finished,
+#                      end, topk, lp, hists, attn=None, diverse=1.0):
+#     """generate the next beam(K-best hyps)"""
+#     topks, lps, hists_list, attns = _unpack_topk(topk, lp, hists, attn)
+#     hyps_lists = [h.extend_k(topks[i], lps[i],
+#                              hists_list[i], attns[i], diverse)
+#                   for i, h in enumerate(beam)]
+#     hyps = list(concat(hyps_lists))
+#     finished, beam = _clean_beam(finished, hyps, end, beam_size)
+
+#     return finished, beam
 
 def next_search_beam(beam, beam_size, finished,
                      end, topk, lp, hists, attn=None, diverse=1.0):
     """generate the next beam(K-best hyps)"""
-    topks, lps, hists_list, attns = _unpack_topk(topk, lp, hists, attn)
+    topks, lps, attns = _unpack_topk(topk, lp, attn)
     hyps_lists = [h.extend_k(topks[i], lps[i],
-                             hists_list[i], attns[i], diverse)
-                  for i, h in enumerate(beam)]
-    hyps = list(concat(hyps_lists))
-    finished, beam = _clean_beam(finished, hyps, end, beam_size)
-
-    return finished, beam
-
-def next_search_beam_cnn(beam, beam_size, finished,
-                     end, topk, lp, hists, attn=None, diverse=1.0):
-    """generate the next beam(K-best hyps)"""
-    topks, lps, hists_list, attns = _unpack_topk(topk, lp, hists, attn)
-    hyps_lists = [h.extend_k(topks[i], lps[i],
-                             hists_list[i], attns[i], diverse)
+                             None, attns[i], diverse)
                   for i, h in enumerate(beam)]
     hyps = list(concat(hyps_lists))
     finished, beam = _clean_beam_cnn(finished, hyps, end, beam_size)
@@ -114,19 +114,20 @@ def best_sequence(finished, beam=None):
         return best_seq
 
 
-def _unpack_topk(topk, lp, hists, attn=None):
+def _unpack_topk(topk, lp, attn=None):
     """unpack the decoder output"""
     beam, _ = topk.size()
     topks = [t for t in topk]
     lps = [l for l in lp]
-    k_hists = [(hists[0][:, i, :], hists[1][:, i, :], hists[2][i, :])
-               for i in range(beam)]
+    # k_hists = [(hists[0][:, i, :], hists[1][:, i, :], hists[2][i, :])
+    #            for i in range(beam)]
 
     if attn is None:
-        return topks, lps, k_hists
+        return topks, lps, None
     else:
         attns = [attn[i] for i in range(beam)]
-        return topks, lps, k_hists, attns
+        return topks, lps, attns
+
 
 def length_wu(cur_len, alpha=0.):
     """GNMT length re-ranking score.
@@ -192,7 +193,10 @@ def _clean_beam_cnn(finished, beam, end_tok, beam_size, remove_tri=True):
     else:
         # ensure beam size
         while len(new_beam) < beam_size:
-            new_beam.append(new_beam[0])
+            try:
+                new_beam.append(new_beam[0])
+            except:
+                new_beam.append(beam[0])
 
     finished = sorted(finished, reverse=True,
                       key=lambda h: h.logprob/len(h.sequence))

@@ -27,8 +27,10 @@ from data.ExtractBatcher import subgraph_make_adj, subgraph_make_adj_edge_in
 from toolz.sandbox import unzip
 import pickle
 
+from transformers import BartTokenizer
+
 MAX_FREQ = 100
-BERT_MAX_LEN = 512
+BERT_MAX_LEN = 1024
 
 try:
     DATASET_DIR = os.environ['DATA']
@@ -126,7 +128,7 @@ def load_best_ckpt(model_dir, reverse=False):
     ckpts = os.listdir(join(model_dir, 'ckpt'))
     ckpt_matcher = re.compile('^ckpt-.*-[0-9]*')
     ckpts = sorted([c for c in ckpts if ckpt_matcher.match(c)],
-                   key=lambda c: float(c.split('-')[1]), reverse=reverse)
+                   key=lambda c: float(c.split('-')[2]), reverse=reverse)
     print('loading checkpoint {}...'.format(ckpts[0]))
     ckpt = torch.load(
         join(model_dir, 'ckpt/{}'.format(ckpts[0])), map_location=lambda storage, loc: storage
@@ -251,10 +253,24 @@ class BeamAbstractorGAT(object):
         abs_args = abs_meta['net_args']
         abs_ckpt = load_best_ckpt(abs_dir, reverse)
         word2id = pkl.load(open(join(abs_dir, 'vocab.pkl'), 'rb'))
-        print('abs args:', abs_args)
-        abstractor = multiBartGAT(**abs_args)
-
+        
+            # make net
+        _args = {}
+        _args['rtoks'] = 1
+        _args['graph_hsz'] = 768
+        _args['blockdrop'] = 0.1
+        _args['sparse'] = False
+        _args['graph_model'] = 'transformer'
+        _args['adj_type'] = 'edge_as_node'
+        _args['mask_type'] = 'soft'
+        _args['node_freq'] = False
+        bart_model = 'facebook/bart-base'
+        
+        abstractor = multiBartGAT.from_pretrained('facebook/bart-base', model_args=_args)
         abstractor.load_state_dict(abs_ckpt)
+
+        abstractor.eval()
+
         self._device = torch.device('cuda' if cuda else 'cpu')
         self._cuda = cuda
         self._net = abstractor.to(self._device)
@@ -263,20 +279,20 @@ class BeamAbstractorGAT(object):
         self._max_len = max_len
         self._min_len = min_len
         print('max len: {}, min len {}'.format(self._max_len, self._min_len))
-        self._adj_type = self._net._adj_type
         self._mask_type = self._net._mask_type
         self._key = key
         #self._copy_from_node = self._net._copy_from_node
-
+        self._adj_type = _args['adj_type']
         self._docgraph = False
 
-        self._bert_length = abstractor._bert_max_length
-        self._tokenizer = abstractor._bert_model._tokenizer
-        try:
-            DATA_DIR = os.environ['DATA']
-            with open(os.path.join(DATA_DIR, "roberta-base-align.pkl"), 'rb') as f:
-                self._align = pickle.load(f)
-
+        self._bert_length = 1024
+        self._tokenizer = BartTokenizer.from_pretrained(bart_model)
+        DATA_DIR = os.environ['DATA']
+        with open(os.path.join(DATA_DIR, "roberta-base-align.pkl"), 'rb') as f:
+            self._align = pickle.load(f)
+                
+        self._end = self._tokenizer.eos_token_id
+        self._unk = self._tokenizer.unk_token_id
         # try:
         #     with open('/data/luyang/process-cnn-dailymail/bert_tokenizaiton_aligns/robertaalign-base-cased.pkl', 'rb') as f:
         #         align2 = pickle.load(f)
@@ -284,90 +300,55 @@ class BeamAbstractorGAT(object):
         #     with open('/media/toni/Data/Capstone/baselines/GraphAugmentedSum/datasets-2/finished_files_openie_3/roberta-base-align.pkl', 'rb') as f:
         #         align2 = pickle.load(f)
         # self._align.update(align2)
-        self._end = self._tokenizer.eos_token_id
-        self._unk = self._tokenizer.unk_token_id
+
 
 
     def __call__(self, batch, beam_size=5, diverse=1.0):
         self._net.eval()
         raw_article_sents = batch[0]
-        if self._copy_from_node:
-            dec_args, id2word, raw_node_exts = self._prepro_copy_from_node(batch)
-        else:
-            dec_args, id2word = self._prepro(batch, self._docgraph)
+        dec_args, id2word = self._prepro(batch, self._docgraph)
         dec_args = (*dec_args, beam_size, diverse, self._min_len)
         all_beams = self._net.batched_beamsearch(*dec_args)
-        if self._copy_from_node:
-            all_beams = list(starmap(_process_beam(id2word, unk=self._unk),
-                                     zip(all_beams, raw_node_exts)))
-        else:
-            all_beams = list(starmap(_process_beam(id2word, unk=self._unk),
-                                 zip(all_beams, raw_article_sents)))
+        all_beams = list(starmap(_process_beam(id2word, unk=self._unk),
+                                zip(all_beams, raw_article_sents)))
         return all_beams
 
     def _prepro(self, batch, docgraph=True):
         raw_article_sents, all_nodes, all_edges, subgraphs, paras, raw_article_batch, max_src_len = batch
-        if self._bert:
-            sources = [' '.join(raw_sents) for raw_sents in raw_article_batch]
-            sources = [[self._tokenizer.bos_token] + self._tokenizer.tokenize(source)[:self._bert_length - 2] + [
-                self._tokenizer.eos_token] for
-                       source in sources]
+        sources = [' '.join(raw_sents) for raw_sents in raw_article_batch]
+        sources = [[self._tokenizer.bos_token] + self._tokenizer.tokenize(source)[:self._bert_length - 2] + [
+            self._tokenizer.eos_token] for
+                    source in sources]
 
-            stride = 256
-            word2id = self._tokenizer.encoder
+        stride = 256
+        word2id = self._tokenizer.encoder
 
-            unk = self._tokenizer.unk_token_id
-            start = self._tokenizer.bos_token_id
-            end = self._tokenizer.eos_token_id
-            pad = self._tokenizer.pad_token_id
-            art_lens = [len(src) for src in sources]
-            ext_word2id = dict(word2id)
-            ext_id2word = dict(self._tokenizer.decoder)
-            for source in sources:
-                for word in source:
-                    if word not in ext_word2id:
-                        ext_word2id[word] = len(ext_word2id)
-                        ext_id2word[len(ext_id2word)] = word
-            extend_arts = conver2id(unk, ext_word2id, sources)
-            if self._bert_length > BERT_MAX_LEN:
-                new_sources = []
-                for source in sources:
-                    if len(source) < BERT_MAX_LEN:
-                        new_sources.append(source)
-                    else:
-                        new_sources.append(source[:BERT_MAX_LEN])
-                        length = len(source) - BERT_MAX_LEN
-                        i = 1
-                        while length > 0:
-                            new_sources.append(source[i * stride:i * stride + BERT_MAX_LEN])
-                            i += 1
-                            length -= (BERT_MAX_LEN - stride)
-                sources = new_sources
-            articles = conver2id(unk, word2id, sources)
-            extend_vsize = len(ext_word2id)
-            article = pad_batch_tensorize(articles, pad, cuda=False
-                                          ).to(self._device)
-            extend_art = pad_batch_tensorize(extend_arts, pad, cuda=False
-                                             ).to(self._device)
-
-
-        else:
-            source_sents = [[sent.lower().split(' ') for sent in arts] for arts in raw_article_batch]
-            ext_word2id = dict(self._word2id)
-            ext_id2word = dict(self._id2word)
-            for raw_words in raw_article_sents:
-                for w in raw_words:
-                    if not w in ext_word2id:
-                        ext_word2id[w] = len(ext_word2id)
-                        ext_id2word[len(ext_id2word)] = w
-            articles = conver2id(UNK, self._word2id, raw_article_sents)
-            art_lens = [len(art) for art in articles]
-            article = pad_batch_tensorize(articles, PAD, cuda=False
-                                          ).to(self._device)
-            extend_arts = conver2id(UNK, ext_word2id, raw_article_sents)
-            extend_art = pad_batch_tensorize(extend_arts, PAD, cuda=False
-                                             ).to(self._device)
-            extend_vsize = len(ext_word2id)
+        unk = self._tokenizer.unk_token_id
+        start = self._tokenizer.bos_token_id
+        end = self._tokenizer.eos_token_id
+        pad = self._tokenizer.pad_token_id
+        art_lens = [len(src) for src in sources]
+        ext_word2id = dict(word2id)
+        ext_id2word = dict(self._tokenizer.decoder)
+        for source in sources:
+            for word in source:
+                if word not in ext_word2id:
+                    ext_word2id[word] = len(ext_word2id)
+                    ext_id2word[len(ext_id2word)] = word
+        extend_arts = conver2id(unk, ext_word2id, sources)
+        new_sources = []
+        for source in sources:
+            if len(source) < max_src_len:
+                new_sources.append(source)
+            else:
+                new_sources.append(source[:max_src_len])
+        sources = new_sources
+        articles = conver2id(unk, word2id, sources)
+        extend_vsize = len(ext_word2id)
+        article = pad_batch_tensorize(articles, pad, cuda=False
+                                        ).to(self._device)
+        extend_art = pad_batch_tensorize(extend_arts, pad, cuda=False
+                                            ).to(self._device)
 
         @curry
         def prepro_one(graph, node_max_len=30, key='summary_worthy', adj_type='no_edge', max_src_len=None, docgraph=True):
@@ -478,7 +459,7 @@ class BeamAbstractorGAT(object):
                 return nodewords, sum_worthy, relations, triples, word_freq_feat, nodefreq
 
         @curry
-        def prepro_one_bert(graph, node_max_len=30, key='summary_worthy', adj_type='no_edge', max_src_len=None, docgraph=True,
+        def prepro_one_bart(graph, node_max_len=30, key='summary_worthy', adj_type='no_edge', max_src_len=None, docgraph=True,
                             tokenizer=None, align=None):
             nodes, edges, article, subgraphs, paras, source = graph
             source_sent = [sent.strip().split() for sent in source]
@@ -647,23 +628,13 @@ class BeamAbstractorGAT(object):
                 return nodewords, sum_worthy, relations, triples, nodefreq
 
 
-        if self._bert:
-            batch_data = list(zip(all_nodes, all_edges, extend_arts, subgraphs, paras, raw_article_batch))
-            batch = list(map(prepro_one_bert(key=self._key, adj_type=self._adj_type, max_src_len=max_src_len, docgraph=docgraph,
-                                        tokenizer=self._tokenizer, align=self._align), batch_data))
-            if docgraph:
-                nodes, sum_worthy, edges, triples, nodefreqs = list(zip(*batch))
-            else:
-                nodes, sum_worthy, edges, triples, nodefreqs, node_lists = list(zip(*batch))
+        batch_data = list(zip(all_nodes, all_edges, extend_arts, subgraphs, paras, raw_article_batch))
+        batch = list(map(prepro_one_bart(key=self._key, adj_type=self._adj_type, max_src_len=max_src_len, docgraph=docgraph,
+                                    tokenizer=self._tokenizer, align=self._align), batch_data))
+        if docgraph:
+            nodes, sum_worthy, edges, triples, nodefreqs = list(zip(*batch))
         else:
-            batch_data = list(zip(all_nodes, all_edges, articles, subgraphs, paras, source_sents))
-            batch = list(
-                map(prepro_one(key=self._key, adj_type=self._adj_type, max_src_len=max_src_len, docgraph=docgraph),
-                    batch_data))
-            if docgraph:
-                nodes, sum_worthy, edges, triples, word_freq_feats, nodefreqs = list(zip(*batch))
-            else:
-                nodes, sum_worthy, edges, triples, word_freq_feats, nodefreqs, node_lists = list(zip(*batch))
+            nodes, sum_worthy, edges, triples, nodefreqs, node_lists = list(zip(*batch))
         node_num = [len(_node) for _node in nodes]
         _nodes = pad_batch_tensorize_3d(nodes, pad=0, cuda=False).to(self._device)
         sum_worthy = pad_batch_tensorize(sum_worthy, pad=0, cuda=False).float().to(self._device)
@@ -672,13 +643,7 @@ class BeamAbstractorGAT(object):
         rmask = pad_batch_tensorize_3d(edges, pad=-1, cuda=False).ne(-1).float().to(self._device)
         # features
         nodefreq = pad_batch_tensorize(nodefreqs, pad=0, cuda=False).to(self._device)
-        if not self._bert:
-            word_freq = pad_batch_tensorize(word_freq_feats, pad=0, cuda=False).to(self._device)
-            feature_dict = {'word_inpara_freq': word_freq,
-                        'node_freq': nodefreq}
-        else:
-            feature_dict = {'node_freq': nodefreq}
-
+        feature_dict = {'node_freq': nodefreq}
 
         if docgraph:
             if self._adj_type == 'concat_triple':
@@ -702,14 +667,9 @@ class BeamAbstractorGAT(object):
             node_info = (_nodes, nmask, node_num, sum_worthy, feature_dict, node_lists)
         edge_info = (_relations, rmask, triples, adjs)
 
-        if self._bert:
-            dec_args = (article, art_lens, extend_art, extend_vsize,
-                    node_info, edge_info, None,
-                    start, end, unk, self._max_len)
-        else:
-            dec_args = (article, art_lens, extend_art, extend_vsize,
-                        node_info, edge_info, None,
-                        START, END, UNK, self._max_len)
+        dec_args = (article, art_lens, extend_art, extend_vsize,
+                node_info, edge_info, None,
+                start, end, unk, self._max_len)
 
         return dec_args, ext_id2word
 
@@ -915,10 +875,29 @@ class BeamAbstractor_cnn(Abstractor):
                                  zip(all_beams, raw_article_sents)))
         return all_beams
 
+# @curry
+# def _process_beam(id2word, beam, art_sent, unk=UNK):
+#     def process_hyp(hyp):
+#         seq = []
+#         for i, attn in zip(hyp.sequence[1:], hyp.attns[:-1]):
+#             if i == unk:
+#                 copy_word = art_sent[max(range(len(art_sent)),
+#                                          key=lambda j: attn[j].item())]
+#                 seq.append(copy_word)
+#             else:
+#                 seq.append(id2word[i])
+#         hyp.sequence = seq
+#         del hyp.hists
+#         del hyp.attns
+#         #del hyp.coverage
+#         return hyp
+#     return list(map(process_hyp, beam))
+
 @curry
 def _process_beam(id2word, beam, art_sent, unk=UNK):
     def process_hyp(hyp):
         seq = []
+        print(hyp)
         for i, attn in zip(hyp.sequence[1:], hyp.attns[:-1]):
             if i == unk:
                 copy_word = art_sent[max(range(len(art_sent)),
@@ -927,7 +906,6 @@ def _process_beam(id2word, beam, art_sent, unk=UNK):
             else:
                 seq.append(id2word[i])
         hyp.sequence = seq
-        del hyp.hists
         del hyp.attns
         #del hyp.coverage
         return hyp
