@@ -22,9 +22,11 @@ BERT_MAX_LEN = 512
 def tokenize(max_len, texts):
     return [t.strip().lower().split()[:max_len] for t in texts]
 
+
 def conver2id(unk, word2id, words_list):
     word2id = defaultdict(lambda: unk, word2id)
     return [[word2id[w] for w in words] for words in words_list]
+
 
 @curry
 def coll_fn_gat(data, max_node_num=200):
@@ -37,6 +39,7 @@ def coll_fn_gat(data, max_node_num=200):
     batch = list(filter(is_good_data, data))
     assert all(map(is_good_data, batch))
     return batch
+
 
 @curry
 def create_word_freq_in_para_feat(paras, tokenized_sents, max_src_len):
@@ -58,7 +61,6 @@ def create_word_freq_in_para_feat(paras, tokenized_sents, max_src_len):
         if not flag:
             sent_align_para.append(last_idx)
 
-
     tokenized_article = list(concat(tokenized_sents))
     tokenized_paras = [[] for _ in range(para_num)]
     for _sid, sent in enumerate(tokenized_sents):
@@ -71,7 +73,7 @@ def create_word_freq_in_para_feat(paras, tokenized_sents, max_src_len):
                 count += 1
         word_inpara_count[word] = count
     article_inpara_freq_feat = [word_inpara_count[word] if word_inpara_count[word] < MAX_FREQ-1 else MAX_FREQ-1 for word in
-                         tokenized_article][:max_src_len]
+                                tokenized_article][:max_src_len]
 
     return article_inpara_freq_feat
 
@@ -123,6 +125,7 @@ def make_node_lists(subgraphs, paras, oor_nodes, id2edge, id2node, max_sent):
 
     return node_lists, edge_lists, triples
 
+
 @curry
 def count_max_sent(source_sent, max_source_num):
     count = 0
@@ -133,6 +136,7 @@ def count_max_sent(source_sent, max_source_num):
             max_sent = _sid + 1
             break
     return max_sent
+
 
 @curry
 def prepro_fn_gat(max_src_len, max_tgt_len, batch, node_max_len=30, key='summary_worthy', adj_type='edge_as_node', docgraph=True):
@@ -146,16 +150,17 @@ def prepro_fn_gat(max_src_len, max_tgt_len, batch, node_max_len=30, key='summary
         source = ' '.join(source).strip().lower().split()[:max_src_len]
         target = ' '.join(target).strip().lower().split()[:max_tgt_len]
 
-        word_freq_feat = create_word_freq_in_para_feat(paras, source_sent, max_src_len)
+        word_freq_feat = create_word_freq_in_para_feat(
+            paras, source_sent, max_src_len)
         assert len(source) == len(word_freq_feat)
-
 
         max_len = max_src_len
         # find out of range and useless nodes
         other_nodes = set()
         oor_nodes = []  # out of range nodes will not included in the graph
         for _id, content in nodes.items():
-            words = [pos for mention in content['content'] for pos in mention['word_pos'] if pos != -1]
+            words = [pos for mention in content['content']
+                     for pos in mention['word_pos'] if pos != -1]
             words = [word for word in words if word < max_len]
             if len(words) != 0:
                 other_nodes.add(_id)
@@ -166,14 +171,16 @@ def prepro_fn_gat(max_src_len, max_tgt_len, batch, node_max_len=30, key='summary
         for _id, content in edges.items():
             if content['content']['arg1'] not in oor_nodes and content['content']['arg2'] not in oor_nodes:
                 words = content['content']['word_pos']
-                new_words = [word for word in words if word > -1 and word < max_len]
+                new_words = [word for word in words if word > -
+                             1 and word < max_len]
                 if len(new_words) > 0:
                     activated_nodes.add(content['content']['arg1'])
                     activated_nodes.add(content['content']['arg2'])
         oor_nodes.extend(list(other_nodes - activated_nodes))
 
         # process nodes
-        sorted_nodes = sorted(nodes.items(), key=lambda x: int(x[0].split('_')[1]))
+        sorted_nodes = sorted(
+            nodes.items(), key=lambda x: int(x[0].split('_')[1]))
         sum_worthy = []
         nodefreq = []
         nodewords = []
@@ -183,7 +190,8 @@ def prepro_fn_gat(max_src_len, max_tgt_len, batch, node_max_len=30, key='summary
         for _id, content in sorted_nodes:
             if _id not in oor_nodes:
 
-                words = [pos for mention in content['content'] for pos in mention['word_pos'] if pos != -1]
+                words = [pos for mention in content['content']
+                         for pos in mention['word_pos'] if pos != -1]
                 words = [word for word in words if word < max_len]
                 words = words[:node_max_len]
                 # sum_worthy.append(content['InSalientSent'])
@@ -205,7 +213,8 @@ def prepro_fn_gat(max_src_len, max_tgt_len, batch, node_max_len=30, key='summary
             nodefreq.extend([1, 1])
             sum_worthy.extend([0, 0])
         nodelength = [len(words) for words in nodewords]
-        nodefreq = [freq if freq < MAX_FREQ - 1 else MAX_FREQ - 1 for freq in nodefreq]
+        nodefreq = [freq if freq < MAX_FREQ -
+                    1 else MAX_FREQ - 1 for freq in nodefreq]
 
         # process edges
         acticated_nodes = set()
@@ -215,14 +224,16 @@ def prepro_fn_gat(max_src_len, max_tgt_len, batch, node_max_len=30, key='summary
         relations = []
         sum_worthy_edges = []
         id2edge = {}
-        sorted_edges = sorted(edges.items(), key=lambda x: int(x[0].split('_')[1]))
+        sorted_edges = sorted(
+            edges.items(), key=lambda x: int(x[0].split('_')[1]))
 
         ii = 0
         for _id, content in sorted_edges:
             if content['content']['arg1'] not in oor_nodes and content['content']['arg2'] not in oor_nodes:
                 words = content['content']['word_pos']
 
-                new_words = [word for word in words if word > -1 and word < max_len]
+                new_words = [word for word in words if word > -
+                             1 and word < max_len]
                 new_words = new_words[:node_max_len]
                 if len(new_words) > 0:
                     node1 = id2node[content['content']['arg1']]
@@ -253,12 +264,13 @@ def prepro_fn_gat(max_src_len, max_tgt_len, batch, node_max_len=30, key='summary
 
         if not docgraph:
             max_sent = count_max_sent(source_sent, max_src_len)
-            node_lists, edge_lists, triples = make_node_lists(subgraphs, paras, oor_nodes, id2edge, id2node, max_sent)
+            node_lists, edge_lists, triples = make_node_lists(
+                subgraphs, paras, oor_nodes, id2edge, id2node, max_sent)
             if adj_type == 'edge_as_node':
                 node_num = len(nodewords)
                 for i in range(len(triples)):
-                    node_lists[i] = node_lists[i] + [edge + node_num for edge in edge_lists[i]]
-
+                    node_lists[i] = node_lists[i] + \
+                        [edge + node_num for edge in edge_lists[i]]
 
         if adj_type == 'edge_as_node':
             nodewords = nodewords + relations
@@ -272,6 +284,7 @@ def prepro_fn_gat(max_src_len, max_tgt_len, batch, node_max_len=30, key='summary
 
     batch = list(map(prepro_one, batch))
     return batch
+
 
 @curry
 def prepro_fn_gat_bart(tokenizer, align, max_src_len, max_tgt_len, batch, node_max_len=30,
@@ -287,8 +300,11 @@ def prepro_fn_gat_bart(tokenizer, align, max_src_len, max_tgt_len, batch, node_m
         source_sent = source
         source = ' '.join(source).strip()
         target = ' '.join(target).strip()
-        source = [tokenizer.bos_token] + tokenizer.tokenize(source)[:max_src_len - 2] + [tokenizer.eos_token]
-        target = tokenizer.tokenize(target)[:max_tgt_len] # will add start and end later
+        source = [tokenizer.bos_token] + \
+            tokenizer.tokenize(source)[
+            :max_src_len - 2] + [tokenizer.eos_token]
+        # will add start and end later
+        target = tokenizer.tokenize(target)[:max_tgt_len]
 
         #original_order = ' '.join(source_sent).split(' ')
         # test_order_match = {}
@@ -297,18 +313,23 @@ def prepro_fn_gat_bart(tokenizer, align, max_src_len, max_tgt_len, batch, node_m
         i = 0
         for sents in [' '.join(source_sent)]:
             sent_words = sents.split(' ')
+            if sent_words[0] not in align:
+                align[sent_words[0]] = 1
             if len(sent_words) > 0:
-                order_match[i] = list(range(count, count + align[sent_words[0]]))
+                order_match[i] = list(
+                    range(count, count + align[sent_words[0]]))
                 count += align[sent_words[0]]
                 i += 1
                 for word in sent_words[1:]:
-                    new_word = ' ' + word # if use bpe
+                    new_word = ' ' + word  # if use bpe
                     #new_word = word
-                    order_match[i] = list(range(count, count + align[new_word]))
+                    if new_word not in align:
+                        align[new_word] = 1
+                    order_match[i] = list(
+                        range(count, count + align[new_word]))
                     # test_order_match[new_word] = [count, count + align[new_word]]
                     count += align[new_word]
                     i += 1
-
 
         # source_lists = [source[:BERT_MAX_LEN]]
         # length = len(source) - BERT_MAX_LEN
@@ -317,7 +338,6 @@ def prepro_fn_gat_bart(tokenizer, align, max_src_len, max_tgt_len, batch, node_m
         #     source_lists.append(source[i * BERT_MAX_LEN - stride:(i + 1) * BERT_MAX_LEN - stride])
         #     i += 1
         #     length -= (BERT_MAX_LEN - stride)
-
 
         #word_freq_feat = create_word_freq_in_para_feat(paras, source_sent, max_src_len)
         #assert len(source) == len(word_freq_feat)
@@ -349,7 +369,8 @@ def prepro_fn_gat_bart(tokenizer, align, max_src_len, max_tgt_len, batch, node_m
         oor_nodes.extend(list(other_nodes - activated_nodes))
 
         # process nodes
-        sorted_nodes = sorted(nodes.items(), key=lambda x: int(x[0].split('_')[1]))
+        sorted_nodes = sorted(
+            nodes.items(), key=lambda x: int(x[0].split('_')[1]))
         sum_worthy = []
         nodefreq = []
         nodewords = []
@@ -381,7 +402,8 @@ def prepro_fn_gat_bart(tokenizer, align, max_src_len, max_tgt_len, batch, node_m
             nodefreq.extend([1, 1])
             sum_worthy.extend([0, 0])
         nodelength = [len(words) for words in nodewords]
-        nodefreq = [freq if freq < MAX_FREQ - 1 else MAX_FREQ - 1 for freq in nodefreq]
+        nodefreq = [freq if freq < MAX_FREQ -
+                    1 else MAX_FREQ - 1 for freq in nodefreq]
 
         # process edges
         activated_nodes = set()
@@ -391,7 +413,8 @@ def prepro_fn_gat_bart(tokenizer, align, max_src_len, max_tgt_len, batch, node_m
         relations = []
         sum_worthy_edges = []
         id2edge = {}
-        sorted_edges = sorted(edges.items(), key=lambda x: int(x[0].split('_')[1]))
+        sorted_edges = sorted(
+            edges.items(), key=lambda x: int(x[0].split('_')[1]))
 
         ii = 0
         for _id, content in sorted_edges:
@@ -429,12 +452,13 @@ def prepro_fn_gat_bart(tokenizer, align, max_src_len, max_tgt_len, batch, node_m
 
         if not docgraph:
             max_sent = count_max_sent(source_sent_tokenized, max_src_len-2)
-            node_lists, edge_lists, triples = make_node_lists(subgraphs, paras, oor_nodes, id2edge, id2node, max_sent)
+            node_lists, edge_lists, triples = make_node_lists(
+                subgraphs, paras, oor_nodes, id2edge, id2node, max_sent)
             if adj_type == 'edge_as_node':
                 node_num = len(nodewords)
                 for i in range(len(triples)):
-                    node_lists[i] = node_lists[i] + [edge + node_num for edge in edge_lists[i]]
-
+                    node_lists[i] = node_lists[i] + \
+                        [edge + node_num for edge in edge_lists[i]]
 
         if adj_type == 'edge_as_node':
             nodewords = nodewords + relations
@@ -448,6 +472,7 @@ def prepro_fn_gat_bart(tokenizer, align, max_src_len, max_tgt_len, batch, node_m
 
     batch = list(map(prepro_one, batch))
     return batch
+
 
 @curry
 def convert_batch_gat_bart(tokenizer, max_src_len, batch):
@@ -488,32 +513,39 @@ def convert_batch_gat_bart(tokenizer, max_src_len, batch):
     sources = conver2id(unk, word2id, sources)
     tar_ins = conver2id(unk, word2id, targets)
     targets = conver2id(unk, ext_word2id, targets)
-    batch = [sources, list(zip(src_exts, tar_ins, targets, nodewords, nodelengths, sum_worhies, nodefreq, relations, rlengths, triples, src_length))]
+    batch = [sources, list(zip(src_exts, tar_ins, targets, nodewords, nodelengths,
+                               sum_worhies, nodefreq, relations, rlengths, triples, src_length))]
     return batch
+
 
 @curry
 def batchify_fn_gat_bart(tokenizer, data, cuda=True,
-                     adj_type='concat_triple', mask_type='none', docgraph=True):
+                         adj_type='concat_triple', mask_type='none', docgraph=True):
     sources, ext_srcs, tar_ins, targets, \
-    nodes, nodelengths, sum_worthy, nodefreq, relations, rlengths, triples, src_lens = (data[0], ) + tuple(map(list, unzip(data[1])))
+        nodes, nodelengths, sum_worthy, nodefreq, relations, rlengths, triples, src_lens = (
+            data[0], ) + tuple(map(list, unzip(data[1])))
     start = tokenizer.bos_token_id
     end = tokenizer.eos_token_id
     pad = tokenizer.pad_token_id
 
-
     if not docgraph:
         node_lists = nodelengths
         if adj_type == 'edge_as_node':
-            adjs = list(map(subgraph_make_adj_edge_in(cuda=cuda), zip(triples, node_lists)))
+            adjs = list(map(subgraph_make_adj_edge_in(
+                cuda=cuda), zip(triples, node_lists)))
         else:
-            adjs = list(map(subgraph_make_adj(cuda=cuda), zip(triples, node_lists)))
+            adjs = list(map(subgraph_make_adj(cuda=cuda),
+                            zip(triples, node_lists)))
     else:
         if adj_type == 'concat_triple':
-            adjs = [make_adj_triple(triple, len(node), len(relation), cuda) for triple, node, relation in zip(triples, nodes, relations)]
+            adjs = [make_adj_triple(triple, len(node), len(relation), cuda)
+                    for triple, node, relation in zip(triples, nodes, relations)]
         elif adj_type == 'edge_as_node':
-            adjs = [make_adj_edge_in(triple, len(node), len(relation), cuda) for triple, node, relation in zip(triples, nodes, relations)]
+            adjs = [make_adj_edge_in(triple, len(node), len(
+                relation), cuda) for triple, node, relation in zip(triples, nodes, relations)]
         else:
-            adjs = [make_adj(triple, len(node), len(node), cuda) for triple, node, relation in zip(triples, nodes, relations)]
+            adjs = [make_adj(triple, len(node), len(node), cuda)
+                    for triple, node, relation in zip(triples, nodes, relations)]
 
     #src_lens = [len(src) for src in sources]
     sources = [src for src in sources]
@@ -539,7 +571,6 @@ def batchify_fn_gat_bart(tokenizer, data, cuda=True,
     nmask = pad_batch_tensorize_3d(nodes, pad=-1, cuda=cuda).ne(-1).float()
     rmask = pad_batch_tensorize_3d(relations, pad=-1, cuda=cuda).ne(-1).float()
 
-
     ext_vsize = ext_src.max().item() + 1
     if docgraph:
         fw_args = (source, src_lens, tar_in, ext_src, ext_vsize, (_nodes, nmask, node_num, sum_worthy, feature_dict),
@@ -549,16 +580,17 @@ def batchify_fn_gat_bart(tokenizer, data, cuda=True,
                    (_relations, rmask, triples, adjs))
     if 'soft' in mask_type:
 
-        
         loss_args = (target, sum_worthy_label)
     else:
         loss_args = (target, )
     return fw_args, loss_args
 
+
 @curry
 def convert_batch_gat(unk, word2id, batch):
     sources, targets, node_infos, edge_infos = list(map(list, unzip(batch)))
-    nodewords, nodelengths, sum_worhies, word_freq_feat, nodefreq = list(unzip(node_infos))
+    nodewords, nodelengths, sum_worhies, word_freq_feat, nodefreq = list(
+        unzip(node_infos))
     relations, rlengths, triples = list(unzip(edge_infos))
     ext_word2id = dict(word2id)
     for source in sources:
@@ -569,28 +601,35 @@ def convert_batch_gat(unk, word2id, batch):
     sources = conver2id(unk, word2id, sources)
     tar_ins = conver2id(unk, word2id, targets)
     targets = conver2id(unk, ext_word2id, targets)
-    batch = list(zip(sources, src_exts, tar_ins, targets, nodewords, nodelengths, sum_worhies, word_freq_feat, nodefreq, relations, rlengths, triples))
+    batch = list(zip(sources, src_exts, tar_ins, targets, nodewords, nodelengths,
+                     sum_worhies, word_freq_feat, nodefreq, relations, rlengths, triples))
     return batch
 
 
 @curry
 def batchify_fn_gat(pad, start, end, data, cuda=True,
-                     adj_type='concat_triple', mask_type='none', decoder_supervision=False, docgraph=True):
+                    adj_type='concat_triple', mask_type='none', decoder_supervision=False, docgraph=True):
     sources, ext_srcs, tar_ins, targets, \
-    nodes, nodelengths, sum_worthy, word_freq_feat, nodefreq, relations, rlengths, triples = tuple(map(list, unzip(data)))
+        nodes, nodelengths, sum_worthy, word_freq_feat, nodefreq, relations, rlengths, triples = tuple(
+            map(list, unzip(data)))
     if not docgraph:
         node_lists = nodelengths
         if adj_type == 'edge_as_node':
-            adjs = list(map(subgraph_make_adj_edge_in(cuda=cuda), zip(triples, node_lists)))
+            adjs = list(map(subgraph_make_adj_edge_in(
+                cuda=cuda), zip(triples, node_lists)))
         else:
-            adjs = list(map(subgraph_make_adj(cuda=cuda), zip(triples, node_lists)))
+            adjs = list(map(subgraph_make_adj(cuda=cuda),
+                            zip(triples, node_lists)))
     else:
         if adj_type == 'concat_triple':
-            adjs = [make_adj_triple(triple, len(node), len(relation), cuda) for triple, node, relation in zip(triples, nodes, relations)]
+            adjs = [make_adj_triple(triple, len(node), len(relation), cuda)
+                    for triple, node, relation in zip(triples, nodes, relations)]
         elif adj_type == 'edge_as_node':
-            adjs = [make_adj_edge_in(triple, len(node), len(relation), cuda) for triple, node, relation in zip(triples, nodes, relations)]
+            adjs = [make_adj_edge_in(triple, len(node), len(
+                relation), cuda) for triple, node, relation in zip(triples, nodes, relations)]
         else:
-            adjs = [make_adj(triple, len(node), len(node), cuda) for triple, node, relation in zip(triples, nodes, relations)]
+            adjs = [make_adj(triple, len(node), len(node), cuda)
+                    for triple, node, relation in zip(triples, nodes, relations)]
 
     src_lens = [len(src) for src in sources]
     sources = [src for src in sources]
@@ -617,8 +656,6 @@ def batchify_fn_gat(pad, start, end, data, cuda=True,
     _relations = pad_batch_tensorize_3d(relations, pad=0, cuda=cuda)
     nmask = pad_batch_tensorize_3d(nodes, pad=-1, cuda=cuda).ne(-1).float()
     rmask = pad_batch_tensorize_3d(relations, pad=-1, cuda=cuda).ne(-1).float()
-
-
 
     ext_vsize = ext_src.max().item() + 1
     if docgraph:
@@ -645,7 +682,8 @@ def convert_batch_gat_copy_from_graph(unk, word2id, batch):
     sources, targets, node_infos, edge_infos = list(map(list, unzip(batch)))
     nodewords, nodelengths, sum_worhies = list(unzip(node_infos))
     nodewords = [list(nodeword) for nodeword in nodewords]
-    all_node_words = [list(concat(nodeword)) for nodeword in nodewords] # position in article
+    all_node_words = [list(concat(nodeword))
+                      for nodeword in nodewords]  # position in article
     sum_worhies = [list(sum_worhy) for sum_worhy in sum_worhies]
     gold_copy_masks = []
     ext_node_aligns = []
@@ -655,7 +693,8 @@ def convert_batch_gat_copy_from_graph(unk, word2id, batch):
         for _i, words in enumerate(nodeword):
             align = [_i for _ in range(len(words))]
             ext_node_align.extend(align)
-            _mask = [1 if sum_worhies[_bid][_i] else 0 for _ in range(len(words))]
+            _mask = [1 if sum_worhies[_bid][_i]
+                     else 0 for _ in range(len(words))]
             gold_mask.extend(_mask)
         gold_copy_masks.append(gold_mask)
 
@@ -680,7 +719,6 @@ def convert_batch_gat_copy_from_graph(unk, word2id, batch):
             node_ext.append(src_exts[_i][word])
         node_exts.append(node_ext)
 
-
     sources = conver2id(unk, word2id, sources)
     tar_ins = conver2id(unk, word2id, targets)
     targets = conver2id(unk, ext_word2id, targets)
@@ -688,8 +726,6 @@ def convert_batch_gat_copy_from_graph(unk, word2id, batch):
         zip(sources, node_exts, tar_ins, targets, nodewords, nodelengths, sum_worhies, relations, rlengths, triples,
             all_node_words, ext_node_aligns, gold_copy_masks))
     return batch
-
-
 
 
 @curry
@@ -704,39 +740,49 @@ def prepro_graph(max_src_len, max_tgt_len, adj_type, batch, docgraph=True, rewar
 
     paras = list(paras)
 
-    word_freq_feats = [create_word_freq_in_para_feat(para, source_sent, max_src_len) for para, source_sent in zip(paras, tokenized_sents)]
+    word_freq_feats = [create_word_freq_in_para_feat(
+        para, source_sent, max_src_len) for para, source_sent in zip(paras, tokenized_sents)]
 
     nodewords, nodelength, nodefreq, sum_worthy, triples, relations, _ = \
         list(zip(*[process_nodes(node, edge, len(list(concat(tokenized_sent))[:max_src_len]), len(tokenized_sent), key='summary_worthy', adj_type=adj_type,
                                  source_sent=tokenized_sent, max_src_len=max_src_len, paras=para, subgraphs=subgraph, docgraph=docgraph)
-    for node, edge, tokenized_sent, para, subgraph in zip(nodes, edges, tokenized_sents, paras, subgraphs)]))
+                   for node, edge, tokenized_sent, para, subgraph in zip(nodes, edges, tokenized_sents, paras, subgraphs)]))
 
     if reward_data_dir is not None:
         if docgraph:
-            batch = list(zip(sources, targets, nodewords, word_freq_feats, nodefreq, relations, triples, questions))
+            batch = list(zip(sources, targets, nodewords, word_freq_feats,
+                             nodefreq, relations, triples, questions))
         else:
             node_lists = nodelength
-            batch = list(zip(sources, targets, nodewords, word_freq_feats, nodefreq, relations, triples, node_lists, questions))
+            batch = list(zip(sources, targets, nodewords, word_freq_feats,
+                             nodefreq, relations, triples, node_lists, questions))
     else:
         if docgraph:
-            batch = list(zip(sources, targets, nodewords, word_freq_feats, nodefreq, relations, triples))
+            batch = list(zip(sources, targets, nodewords,
+                             word_freq_feats, nodefreq, relations, triples))
         else:
             node_lists = nodelength
-            batch = list(zip(sources, targets, nodewords, word_freq_feats, nodefreq, relations, triples, node_lists))
+            batch = list(zip(sources, targets, nodewords, word_freq_feats,
+                             nodefreq, relations, triples, node_lists))
     return batch
+
 
 @curry
 def convert_batch_graph_rl(unk, word2id, batch, docgraph=True, reward_data_dir=None):
     if reward_data_dir is not None:
         if docgraph:
-            raw_sources, raw_targets, nodewords, word_freq_feats, nodefreq, relations, triples, questions = map(list, unzip(batch))
+            raw_sources, raw_targets, nodewords, word_freq_feats, nodefreq, relations, triples, questions = map(
+                list, unzip(batch))
         else:
-            raw_sources, raw_targets, nodewords, word_freq_feats, nodefreq, relations, triples, node_lists, questions = map(list, unzip(batch))
+            raw_sources, raw_targets, nodewords, word_freq_feats, nodefreq, relations, triples, node_lists, questions = map(
+                list, unzip(batch))
     else:
         if docgraph:
-            raw_sources, raw_targets, nodewords, word_freq_feats, nodefreq, relations, triples = map(list, unzip(batch))
+            raw_sources, raw_targets, nodewords, word_freq_feats, nodefreq, relations, triples = map(
+                list, unzip(batch))
         else:
-            raw_sources, raw_targets, nodewords, word_freq_feats, nodefreq, relations, triples, node_lists = map(list, unzip(batch))
+            raw_sources, raw_targets, nodewords, word_freq_feats, nodefreq, relations, triples, node_lists = map(
+                list, unzip(batch))
     ext_word2id = dict(word2id)
     for source in raw_sources:
         for word in source:
@@ -745,13 +791,16 @@ def convert_batch_graph_rl(unk, word2id, batch, docgraph=True, reward_data_dir=N
     src_exts = conver2id(unk, ext_word2id, raw_sources)
     sources = conver2id(unk, word2id, raw_sources)
     if docgraph:
-        batch = list(zip(sources, src_exts, nodewords, word_freq_feats, nodefreq, relations, triples))
+        batch = list(zip(sources, src_exts, nodewords,
+                         word_freq_feats, nodefreq, relations, triples))
     else:
-        batch = list(zip(sources, src_exts, nodewords, word_freq_feats, nodefreq, relations, triples, node_lists))
+        batch = list(zip(sources, src_exts, nodewords, word_freq_feats,
+                         nodefreq, relations, triples, node_lists))
     if reward_data_dir is not None:
         return (batch, ext_word2id, raw_sources, raw_targets, questions)
     else:
         return (batch, ext_word2id, raw_sources, raw_targets)
+
 
 @curry
 def batchify_fn_graph_rl(pad, start, end, data, cuda=True, adj_type='concat_triple', docgraph=True, reward_data_dir=None):
@@ -761,7 +810,8 @@ def batchify_fn_graph_rl(pad, start, end, data, cuda=True, adj_type='concat_trip
         batch, ext_word2id, raw_articles, raw_targets = data
         questions = []
     if docgraph:
-        sources, ext_srcs, nodes, word_freq_feat, nodefreq, relations, triples = tuple(map(list, unzip(batch)))
+        sources, ext_srcs, nodes, word_freq_feat, nodefreq, relations, triples = tuple(
+            map(list, unzip(batch)))
         if adj_type == 'concat_triple':
             adjs = [make_adj_triple(triple, len(node), len(relation), cuda) for triple, node, relation in
                     zip(triples, nodes, relations)]
@@ -772,14 +822,14 @@ def batchify_fn_graph_rl(pad, start, end, data, cuda=True, adj_type='concat_trip
             adjs = [make_adj(triple, len(node), len(node), cuda) for triple, node, relation in
                     zip(triples, nodes, relations)]
     else:
-        sources, ext_srcs, nodes, word_freq_feat, nodefreq, relations, triples, node_lists = tuple(map(list, unzip(batch)))
+        sources, ext_srcs, nodes, word_freq_feat, nodefreq, relations, triples, node_lists = tuple(
+            map(list, unzip(batch)))
         if adj_type == 'edge_as_node':
-            adjs = list(map(subgraph_make_adj_edge_in(cuda=cuda), zip(triples, node_lists)))
+            adjs = list(map(subgraph_make_adj_edge_in(
+                cuda=cuda), zip(triples, node_lists)))
         else:
-            adjs = list(map(subgraph_make_adj(cuda=cuda), zip(triples, node_lists)))
-
-
-
+            adjs = list(map(subgraph_make_adj(cuda=cuda),
+                            zip(triples, node_lists)))
 
     nodefreq = pad_batch_tensorize(nodefreq, pad=pad, cuda=cuda)
     word_freq = pad_batch_tensorize(word_freq_feat, pad=pad, cuda=cuda)
@@ -789,23 +839,20 @@ def batchify_fn_graph_rl(pad, start, end, data, cuda=True, adj_type='concat_trip
     _nodes = pad_batch_tensorize_3d(nodes, pad=0, cuda=cuda)
     nmask = pad_batch_tensorize_3d(nodes, pad=-1, cuda=cuda).ne(-1).float()
 
-
-
     src_lens = [len(src) for src in sources]
     sources = [src for src in sources]
     ext_srcs = [ext for ext in ext_srcs]
-
 
     source = pad_batch_tensorize(sources, pad, cuda)
     ext_src = pad_batch_tensorize(ext_srcs, pad, cuda)
 
     ext_vsize = ext_src.max().item() + 1
     extend_vsize = len(ext_word2id)
-    ext_id2word = {_id:_word for _word, _id in ext_word2id.items()}
+    ext_id2word = {_id: _word for _word, _id in ext_word2id.items()}
     #print('ext_size:', ext_vsize, extend_vsize)
     if docgraph:
         fw_args = (source, src_lens, ext_src, extend_vsize, _nodes, nmask, node_num, feature_dict, adjs,
-               START, END, UNK, 100)
+                   START, END, UNK, 100)
     else:
         fw_args = (source, src_lens, ext_src, extend_vsize, _nodes, nmask, node_num, feature_dict, node_lists, adjs,
                    START, END, UNK, 100)
@@ -813,6 +860,7 @@ def batchify_fn_graph_rl(pad, start, end, data, cuda=True, adj_type='concat_trip
     loss_args = (raw_articles, ext_id2word, raw_targets, questions)
 
     return fw_args, loss_args
+
 
 @curry
 def prepro_graph_bert(tokenizer, align, max_src_len, max_tgt_len, adj_type, batch, docgraph=True, reward_data_dir=None):
@@ -828,8 +876,10 @@ def prepro_graph_bert(tokenizer, align, max_src_len, max_tgt_len, adj_type, batc
 
     targets = [tokenizer.tokenize(target)[:max_tgt_len] for target in targets]
 
-    source_sents_tokenized = [[tokenizer.tokenize(sent) for sent in source] for source in old_sources]
-    max_sents = list(map(count_max_sent(max_source_num=max_src_len - 2), source_sents_tokenized))
+    source_sents_tokenized = [
+        [tokenizer.tokenize(sent) for sent in source] for source in old_sources]
+    max_sents = list(
+        map(count_max_sent(max_source_num=max_src_len - 2), source_sents_tokenized))
 
     #tokenized_sents = list(map(tokenize(None), old_sources))
 
@@ -839,22 +889,27 @@ def prepro_graph_bert(tokenizer, align, max_src_len, max_tgt_len, adj_type, batc
 
     nodewords, nodelength, nodefreq, sum_worthy, triples, relations = \
         list(zip(*[process_nodes_bert(align, node, edge, len(source)-1, max_sent, key='summary_worthy', adj_type=adj_type,
-                                 source_sent=sent, paras=para, subgraphs=subgraph, docgraph=docgraph, source=source)
-    for node, edge, sent, para, subgraph, source, max_sent in zip(nodes, edges, old_sources, paras, subgraphs, sources, max_sents)]))
+                                      source_sent=sent, paras=para, subgraphs=subgraph, docgraph=docgraph, source=source)
+                   for node, edge, sent, para, subgraph, source, max_sent in zip(nodes, edges, old_sources, paras, subgraphs, sources, max_sents)]))
 
     if reward_data_dir is not None:
         if docgraph:
-            batch = list(zip(sources, targets, nodewords, nodefreq, relations, triples, questions))
+            batch = list(zip(sources, targets, nodewords,
+                             nodefreq, relations, triples, questions))
         else:
             node_lists = nodelength
-            batch = list(zip(sources, targets, nodewords, nodefreq, relations, triples, node_lists, questions))
+            batch = list(zip(sources, targets, nodewords, nodefreq,
+                             relations, triples, node_lists, questions))
     else:
         if docgraph:
-            batch = list(zip(sources, targets, nodewords, nodefreq, relations, triples))
+            batch = list(zip(sources, targets, nodewords,
+                             nodefreq, relations, triples))
         else:
             node_lists = nodelength
-            batch = list(zip(sources, targets, nodewords, nodefreq, relations, triples, node_lists))
+            batch = list(zip(sources, targets, nodewords,
+                             nodefreq, relations, triples, node_lists))
     return batch
+
 
 @curry
 def convert_batch_graph_rl_bert(tokenizer, max_src_len, batch, docgraph=True, reward_data_dir=None):
@@ -864,14 +919,18 @@ def convert_batch_graph_rl_bert(tokenizer, max_src_len, batch, docgraph=True, re
     ext_word2id = dict(word2id)
     if reward_data_dir is not None:
         if docgraph:
-            raw_sources, raw_targets, nodewords, nodefreq, relations, triples, questions = map(list, unzip(batch))
+            raw_sources, raw_targets, nodewords, nodefreq, relations, triples, questions = map(
+                list, unzip(batch))
         else:
-            raw_sources, raw_targets, nodewords, nodefreq, relations, triples, node_lists, questions = map(list, unzip(batch))
+            raw_sources, raw_targets, nodewords, nodefreq, relations, triples, node_lists, questions = map(
+                list, unzip(batch))
     else:
         if docgraph:
-            raw_sources, raw_targets, nodewords, nodefreq, relations, triples = map(list, unzip(batch))
+            raw_sources, raw_targets, nodewords, nodefreq, relations, triples = map(
+                list, unzip(batch))
         else:
-            raw_sources, raw_targets, nodewords, nodefreq, relations, triples, node_lists = map(list, unzip(batch))
+            raw_sources, raw_targets, nodewords, nodefreq, relations, triples, node_lists = map(
+                list, unzip(batch))
     src_lens = [len(src) for src in raw_sources]
     for source in raw_sources:
         for word in source:
@@ -889,7 +948,8 @@ def convert_batch_graph_rl_bert(tokenizer, max_src_len, batch, docgraph=True, re
                 length = len(source) - BERT_MAX_LEN
                 i = 1
                 while length > 0:
-                    new_sources.append(source[i * stride:i * stride + BERT_MAX_LEN])
+                    new_sources.append(
+                        source[i * stride:i * stride + BERT_MAX_LEN])
                     i += 1
                     length -= (BERT_MAX_LEN - stride)
         sources = new_sources
@@ -897,13 +957,16 @@ def convert_batch_graph_rl_bert(tokenizer, max_src_len, batch, docgraph=True, re
     tar_ins = conver2id(unk, word2id, raw_targets)
     targets = conver2id(unk, ext_word2id, raw_targets)
     if docgraph:
-        batch = [sources, list(zip(src_exts, nodewords, nodefreq, relations, triples, src_lens, tar_ins, targets))]
+        batch = [sources, list(zip(
+            src_exts, nodewords, nodefreq, relations, triples, src_lens, tar_ins, targets))]
     else:
-        batch = [sources, list(zip(src_exts, nodewords, nodefreq, relations, triples, node_lists, src_lens, tar_ins, targets))]
+        batch = [sources, list(zip(src_exts, nodewords, nodefreq,
+                                   relations, triples, node_lists, src_lens, tar_ins, targets))]
     if reward_data_dir is not None:
         return (batch, ext_word2id, raw_sources, raw_targets, questions)
     else:
         return (batch, ext_word2id, raw_sources, raw_targets)
+
 
 @curry
 def batchify_fn_graph_rl_bert(tokenizer, data, cuda=True, adj_type='concat_triple', docgraph=True, reward_data_dir=None):
@@ -918,7 +981,8 @@ def batchify_fn_graph_rl_bert(tokenizer, data, cuda=True, adj_type='concat_tripl
 
         questions = []
     if docgraph:
-        sources, ext_srcs, nodes, nodefreq, relations, triples, src_lens, tar_ins, targets = (batch[0],) + tuple(map(list, unzip(batch[1])))
+        sources, ext_srcs, nodes, nodefreq, relations, triples, src_lens, tar_ins, targets = (
+            batch[0],) + tuple(map(list, unzip(batch[1])))
         if adj_type == 'concat_triple':
             adjs = [make_adj_triple(triple, len(node), len(relation), cuda) for triple, node, relation in
                     zip(triples, nodes, relations)]
@@ -929,14 +993,14 @@ def batchify_fn_graph_rl_bert(tokenizer, data, cuda=True, adj_type='concat_tripl
             adjs = [make_adj(triple, len(node), len(node), cuda) for triple, node, relation in
                     zip(triples, nodes, relations)]
     else:
-        sources, ext_srcs, nodes, nodefreq, relations, triples, node_lists, src_lens, tar_ins, targets = (batch[0],) + tuple(map(list, unzip(batch[1])))
+        sources, ext_srcs, nodes, nodefreq, relations, triples, node_lists, src_lens, tar_ins, targets = (
+            batch[0],) + tuple(map(list, unzip(batch[1])))
         if adj_type == 'edge_as_node':
-            adjs = list(map(subgraph_make_adj_edge_in(cuda=cuda), zip(triples, node_lists)))
+            adjs = list(map(subgraph_make_adj_edge_in(
+                cuda=cuda), zip(triples, node_lists)))
         else:
-            adjs = list(map(subgraph_make_adj(cuda=cuda), zip(triples, node_lists)))
-
-
-
+            adjs = list(map(subgraph_make_adj(cuda=cuda),
+                            zip(triples, node_lists)))
 
     nodefreq = pad_batch_tensorize(nodefreq, pad=0, cuda=cuda)
     feature_dict = {'node_freq': nodefreq}
@@ -953,17 +1017,16 @@ def batchify_fn_graph_rl_bert(tokenizer, data, cuda=True, adj_type='concat_tripl
     sources = [src for src in sources]
     ext_srcs = [ext for ext in ext_srcs]
 
-
     source = pad_batch_tensorize(sources, pad, cuda)
     ext_src = pad_batch_tensorize(ext_srcs, pad, cuda)
 
     ext_vsize = ext_src.max().item() + 1
     extend_vsize = len(ext_word2id)
-    ext_id2word = {_id:_word for _word, _id in ext_word2id.items()}
+    ext_id2word = {_id: _word for _word, _id in ext_word2id.items()}
     #print('ext_size:', ext_vsize, extend_vsize)
     if docgraph:
         fw_args = (source, src_lens, ext_src, extend_vsize, _nodes, nmask, node_num, feature_dict, adjs,
-               start, end, unk, 150, tar_in)
+                   start, end, unk, 150, tar_in)
     else:
         fw_args = (source, src_lens, ext_src, extend_vsize, _nodes, nmask, node_num, feature_dict, node_lists, adjs,
                    start, end, unk, 150, tar_in)
