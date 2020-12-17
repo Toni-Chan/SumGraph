@@ -755,6 +755,8 @@ class MultiTaskTrainer(object):
         return val_metric
 
     def checkpoint(self):
+        self._pipeline.checkpoint(
+            join(self._save_dir, 'ckpt_bkup'))
         val_metric = self.validate()
         self._pipeline.checkpoint(
             join(self._save_dir, 'ckpt'), self._step, val_metric)
@@ -865,14 +867,16 @@ class MultiTaskPipeline(object):
 
     def validate(self):
         return self._val_fn(self._val_batcher(self._batch_size))
-
-    def checkpoint(self, save_path, step, val_metric=None):
+    
+    def checkpoint(self, save_path, step=None, val_metric=None):
         save_dict = {}
         if val_metric is not None and len(val_metric) == 2:
             name = 'ckpt-{:6f}-{:3f}-{}'.format(val_metric[0], val_metric[1], step)
             save_dict['val_metric'] = val_metric
-        else:
+        elif step is not None:
             name = 'ckpt-{}'.format(step)
+        else:
+            name = 'ckpt-backup'
 
         save_dict['state_dict'] = self._net.state_dict()
         save_dict['optimizer'] = self._opt.state_dict()
