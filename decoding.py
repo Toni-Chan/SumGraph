@@ -128,7 +128,7 @@ def load_best_ckpt(model_dir, reverse=False):
     ckpts = os.listdir(join(model_dir, 'ckpt'))
     ckpt_matcher = re.compile('^ckpt-.*-[0-9]*')
     ckpts = sorted([c for c in ckpts if ckpt_matcher.match(c)],
-                   key=lambda c: float(c.split('-')[2]), reverse=reverse)
+                   key=lambda c: float(c.split('-')[1]), reverse=reverse)
     print('loading checkpoint {}...'.format(ckpts[0]))
     ckpt = torch.load(
         join(model_dir, 'ckpt/{}'.format(ckpts[0])), map_location=lambda storage, loc: storage
@@ -246,7 +246,7 @@ class Abstractor(object):
         return dec_sents
 
 class BeamAbstractorGAT(object):
-    def __init__(self, abs_dir, max_len=100, cuda=True, min_len=0, reverse=True, key='summary_worthy'):
+    def __init__(self, abs_dir, max_len=100, cuda=True, min_len=0, reverse=True, key='summary_worthy', docgraph=False):
         
         abs_meta = pickle.load(open(join(abs_dir, 'meta.json'),'rb'))# json.load(open(join(abs_dir, 'meta.json')))
         assert abs_meta['net'] == 'base_abstractor'
@@ -264,6 +264,7 @@ class BeamAbstractorGAT(object):
         _args['adj_type'] = 'edge_as_node'
         _args['mask_type'] = 'soft'
         _args['node_freq'] = False
+        _args['docgraph'] = docgraph
         bart_model = 'facebook/bart-base'
         
         abstractor = multiBartGAT.from_pretrained('facebook/bart-base', model_args=_args)
@@ -306,7 +307,9 @@ class BeamAbstractorGAT(object):
     def __call__(self, batch, beam_size=5, diverse=1.0):
         self._net.eval()
         raw_article_sents = batch[0]
+        print("start of batch: before prepro")
         dec_args, id2word = self._prepro(batch, self._docgraph)
+        print("start of batch: after prepro")
         dec_args = (*dec_args, beam_size, diverse, self._min_len)
         all_beams = self._net.batched_beamsearch(*dec_args)
         all_beams = list(starmap(_process_beam(id2word, unk=self._unk),

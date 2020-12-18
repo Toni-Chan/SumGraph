@@ -27,6 +27,7 @@ from functools import reduce
 import operator as op
 import pickle
 
+from tqdm import tqdm
 
 MAX_ABS_NUM = 6  # need to set max sentences to extract for non-RL extractor
 
@@ -126,7 +127,7 @@ def tokenize_keepcase(max_len, texts):
 #                 length += len(decoded_sents)
 #         print('average summary length:', length / i)
 
-def decodeGAT(save_path, abs_dir, split, batch_size, max_len, cuda, min_len):
+def decodeGAT(save_path, abs_dir, split, batch_size, max_len, cuda, min_len, docgraph=False):
     start = time()
     # setup model
     if abs_dir is None:
@@ -135,7 +136,8 @@ def decodeGAT(save_path, abs_dir, split, batch_size, max_len, cuda, min_len):
         raise Exception('abs directory none!')
     else:
         #abstractor = Abstractor(abs_dir, max_len, cuda)
-        abstractor = BeamAbstractorGAT(abs_dir, max_len, cuda, min_len, reverse=args.reverse)
+        abstractor = BeamAbstractorGAT(abs_dir, max_len, cuda, min_len, reverse=args.reverse,
+                                       docgraph=docgraph)
 
 
     tokenizer = abstractor._tokenizer
@@ -145,7 +147,7 @@ def decodeGAT(save_path, abs_dir, split, batch_size, max_len, cuda, min_len):
     def coll(batch):
         articles, nodes, edges, subgraphs, paras = list(filter(bool, list(zip(*batch))))
         return (articles, nodes, edges, subgraphs, paras)
-    dataset = AbsDecodeDatasetGAT(split, docgraph=False)
+    dataset = AbsDecodeDatasetGAT(split, docgraph=docgraph)
 
     n_data = len(dataset)
     loader = DataLoader(
@@ -174,7 +176,8 @@ def decodeGAT(save_path, abs_dir, split, batch_size, max_len, cuda, min_len):
     i = 0
     length = 0
     with torch.no_grad():
-        for i_debug, raw_batch in enumerate(loader):
+        for i_debug, raw_batch in tqdm(enumerate(loader)):
+            print("start of batch: data loading")
             raw_article_batch, nodes, edges, paras, subgraphs = raw_batch
             raw_sents_batch = [[' '.join(article)] for article in raw_article_batch]
             tokenized_article_batch = map(tokenize_keepcase(args.max_input), raw_sents_batch)
@@ -186,6 +189,7 @@ def decodeGAT(save_path, abs_dir, split, batch_size, max_len, cuda, min_len):
             pre_abs = [article[0] for article in pre_abs]
             for j in range(len(pre_abs)):
                 beam_inds += [(len(beam_inds), 1)]
+            print("start of batch: decode_abs")
             all_beams = abstractor((pre_abs, nodes, edges, paras, subgraphs, raw_article_batch, args.max_input), beam_size, diverse=1.0)
             dec_outs = rerank_mp(all_beams, beam_inds)
 
@@ -287,6 +291,7 @@ if __name__ == '__main__':
     parser.add_argument('--min_dec_word', type=int, action='store', default=0,
                         help='maximun words to be decoded for the abstractor')
     parser.add_argument('--gpu_id', type=int, default=0, help='gpu id')
+    parser.add_argument('--docgraph', action='store_true', help='if model contains gat encoder docgraph')
 
 
     parser.add_argument('--no-cuda', action='store_true',
@@ -299,4 +304,4 @@ if __name__ == '__main__':
     data_split = 'test' if args.test else 'val'
     print(args)
     decodeGAT(args.path, args.abs_dir,
-            data_split, args.batch, args.max_dec_word, args.cuda, args.min_dec_word)
+            data_split, args.batch, args.max_dec_word, args.cuda, args.min_dec_word, args.docgraph)

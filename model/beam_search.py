@@ -65,11 +65,11 @@ def create_beam(tok, lp, hists):
 def pack_beam(hyps, device):
     """pack a list of hypothesis to decoder input batches"""
     token = torch.LongTensor([h.sequence for h in hyps])
-
-    # states = torch.stack([hyp.hists for hyp in hyps], dim=0)
+    # states = torch.LongTensor([h.hists for h in hyps])
+    states = torch.stack([hyp.hists for hyp in hyps], dim=0)
     token = token.to(device)
-    # states = states.to(device)
-    return token
+    states = states.to(device)
+    return token, states
 
 
 # def next_search_beam(beam, beam_size, finished,
@@ -87,9 +87,9 @@ def pack_beam(hyps, device):
 def next_search_beam(beam, beam_size, finished,
                      end, topk, lp, hists, attn=None, diverse=1.0):
     """generate the next beam(K-best hyps)"""
-    topks, lps, attns = _unpack_topk(topk, lp, attn)
+    topks, lps, hists, attns = _unpack_topk(topk, lp, hists, attn)
     hyps_lists = [h.extend_k(topks[i], lps[i],
-                             None, attns[i], diverse)
+                             hists[i], attns[i], diverse)
                   for i, h in enumerate(beam)]
     hyps = list(concat(hyps_lists))
     finished, beam = _clean_beam_cnn(finished, hyps, end, beam_size)
@@ -114,19 +114,20 @@ def best_sequence(finished, beam=None):
         return best_seq
 
 
-def _unpack_topk(topk, lp, attn=None):
+def _unpack_topk(topk, lp, hists, attn=None):
     """unpack the decoder output"""
     beam, _ = topk.size()
     topks = [t for t in topk]
     lps = [l for l in lp]
+    k_hists = [hist for hist in hists]
     # k_hists = [(hists[0][:, i, :], hists[1][:, i, :], hists[2][i, :])
     #            for i in range(beam)]
 
     if attn is None:
-        return topks, lps, None
+        return topks, lps, k_hists
     else:
         attns = [attn[i] for i in range(beam)]
-        return topks, lps, attns
+        return topks, lps, k_hists, attns
 
 
 def length_wu(cur_len, alpha=0.):
