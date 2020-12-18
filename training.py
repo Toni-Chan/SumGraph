@@ -756,7 +756,7 @@ class MultiTaskTrainer(object):
 
     def checkpoint(self):
         self._pipeline.checkpoint(
-            join(self._save_dir, 'ckpt_bkup'))
+            join(self._save_dir, 'ckpt'))
         val_metric = self.validate()
         self._pipeline.checkpoint(
             join(self._save_dir, 'ckpt'), self._step, val_metric)
