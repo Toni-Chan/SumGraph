@@ -1583,8 +1583,6 @@ class multiBartGAT(PretrainedBartModel):
         batch_size = len(art_lens)
         vsize = self.shared.num_embeddings
 
-        print("start of batch")
-
         return_dict = False
         article_embedding = self.encoder.embed(article)
         # 2. Use encoded text and graph input to from attention
@@ -1639,7 +1637,6 @@ class multiBartGAT(PretrainedBartModel):
         mask = len_mask(art_lens, attention[-1].device).unsqueeze(-2)
 
         # init beams
-        print(last_hidden.shape)
         all_beams = [bs.init_beam(go, last_hidden[i])
                      for i in range(batch_size)]
         if self._hierarchical_attn:
@@ -1763,9 +1760,4 @@ class multiBartGAT(PretrainedBartModel):
                                               finished_beams, all_beams)):
                 if o is None:
                     outputs[i] = (f+b)[:beam_size]
-        print("end of batch")
         return outputs
-
-
-        # Problems now: 1. we have duplicate beams in the sequence 
-        #               2. Output for all articles are the same and is not recognizable

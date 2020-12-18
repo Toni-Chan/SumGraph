@@ -12,6 +12,7 @@ from cytoolz import identity
 
 import torch
 from torch.utils.data import DataLoader
+# torch.multiprocessing.set_start_method('spawn')
 
 from data.batcher import tokenize, preproc
 
@@ -27,7 +28,13 @@ from functools import reduce
 import operator as op
 import pickle
 
-from tqdm import tqdm
+
+# from torch.multiprocessing import Pool, Process, set_start_method
+# try:
+#      set_start_method('spawn')
+# except RuntimeError:
+#     pass
+
 
 MAX_ABS_NUM = 6  # need to set max sentences to extract for non-RL extractor
 
@@ -176,8 +183,7 @@ def decodeGAT(save_path, abs_dir, split, batch_size, max_len, cuda, min_len, doc
     i = 0
     length = 0
     with torch.no_grad():
-        for i_debug, raw_batch in tqdm(enumerate(loader)):
-            print("start of batch: data loading")
+        for i_debug, raw_batch in enumerate(loader):
             raw_article_batch, nodes, edges, paras, subgraphs = raw_batch
             raw_sents_batch = [[' '.join(article)] for article in raw_article_batch]
             tokenized_article_batch = map(tokenize_keepcase(args.max_input), raw_sents_batch)
@@ -189,9 +195,8 @@ def decodeGAT(save_path, abs_dir, split, batch_size, max_len, cuda, min_len, doc
             pre_abs = [article[0] for article in pre_abs]
             for j in range(len(pre_abs)):
                 beam_inds += [(len(beam_inds), 1)]
-            print("start of batch: decode_abs")
             all_beams = abstractor((pre_abs, nodes, edges, paras, subgraphs, raw_article_batch, args.max_input), beam_size, diverse=1.0)
-            dec_outs = rerank_mp(all_beams, beam_inds)
+            dec_outs = rerank(all_beams, beam_inds)
 
             for dec_out in dec_outs:
                 text = ''.join(' '.join(dec_out).split(' '))

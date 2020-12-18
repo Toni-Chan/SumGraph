@@ -307,9 +307,7 @@ class BeamAbstractorGAT(object):
     def __call__(self, batch, beam_size=5, diverse=1.0):
         self._net.eval()
         raw_article_sents = batch[0]
-        print("start of batch: before prepro")
         dec_args, id2word = self._prepro(batch, self._docgraph)
-        print("start of batch: after prepro")
         dec_args = (*dec_args, beam_size, diverse, self._min_len)
         all_beams = self._net.batched_beamsearch(*dec_args)
         all_beams = list(starmap(_process_beam(id2word, unk=self._unk),
@@ -639,6 +637,7 @@ class BeamAbstractorGAT(object):
         else:
             nodes, sum_worthy, edges, triples, nodefreqs, node_lists = list(zip(*batch))
         node_num = [len(_node) for _node in nodes]
+
         _nodes = pad_batch_tensorize_3d(nodes, pad=0, cuda=False).to(self._device)
         sum_worthy = pad_batch_tensorize(sum_worthy, pad=0, cuda=False).float().to(self._device)
         _relations = pad_batch_tensorize_3d(edges, pad=0, cuda=False).to(self._device)
