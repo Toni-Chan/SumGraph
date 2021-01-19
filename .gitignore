@@ -1,11 +1,12 @@
 transformers-master
-
+data
+checkpoint
 checkpoints*
 SumGraph
 checkpoints
 model/bak
 *.ckpt 
 *.pyc
-
+bak
 datasets-*
 datasets

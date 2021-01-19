@@ -34,7 +34,99 @@ MAX_ABS_NUM = 6  # need to set max sentences to extract for non-RL extractor
 def tokenize_keepcase(max_len, texts):
     return [t.strip().split()[:max_len] for t in texts]
 
-def decode(save_path, abs_dir, split, batch_size, max_len, cuda, min_len):
+# def decode(save_path, abs_dir, split, batch_size, max_len, cuda, min_len):
+#     start = time()
+#     # setup model
+#     if abs_dir is None:
+#         # NOTE: if no abstractor is provided then
+#         #       the whole model would be extractive summarization
+#         raise Exception('abs directory none!')
+#     else:
+#         #abstractor = Abstractor(abs_dir, max_len, cuda)
+#         abstractor = BeamAbstractor(abs_dir, max_len, cuda, min_len, reverse=args.reverse)
+
+#     bert = abstractor._bert
+#     if bert:
+#         tokenizer = abstractor._tokenizer
+#     if bert:
+#         import logging
+#         logging.basicConfig(level=logging.ERROR)
+
+#     # if args.docgraph or args.paragraph:
+#     #     abstractor = BeamAbstractorGAT(abs_dir, max_len, cuda, min_len, reverse=args.reverse)
+
+#     # setup loader
+#     def coll(batch):
+#         articles = list(filter(bool, batch))
+#         return articles
+#     dataset = AbsDecodeDataset(split)
+
+#     n_data = len(dataset)
+#     loader = DataLoader(
+#         dataset, batch_size=batch_size, shuffle=False, num_workers=4,
+#         collate_fn=coll
+#     )
+
+#     os.makedirs(save_path)
+#     # prepare save paths and logs
+#     dec_log = {}
+#     dec_log['abstractor'] = (None if abs_dir is None
+#                              else json.load(open(join(abs_dir, 'meta.json'))))
+#     dec_log['rl'] = False
+#     dec_log['split'] = split
+#     dec_log['beam'] = 5  # greedy decoding only
+#     beam_size = 5
+#     with open(join(save_path, 'log.json'), 'w') as f:
+#         json.dump(dec_log, f, indent=4)
+#     os.makedirs(join(save_path, 'output'))
+
+#     # Decoding
+#     i = 0
+#     length = 0
+#     with torch.no_grad():
+#         for i_debug, raw_article_batch in enumerate(loader):
+#             if bert:
+#                 tokenized_article_batch = map(tokenize_keepcase(args.max_input), raw_article_batch)
+#             else:
+#                 tokenized_article_batch = map(tokenize(args.max_input), raw_article_batch)
+#             ext_arts = []
+#             ext_inds = []
+#             beam_inds = []
+#             pre_abs = list(tokenized_article_batch)
+#             pre_abs = [article[0] for article in pre_abs]
+#             for j in range(len(pre_abs)):
+#                 beam_inds += [(len(beam_inds), 1)]
+#             all_beams = abstractor(pre_abs, beam_size, diverse=1.0)
+#             dec_outs = rerank_mp(all_beams, beam_inds)
+
+#             for dec_out in dec_outs:
+#                 if bert:
+#                     text = ''.join(' '.join(dec_out).split(' '))
+#                     dec_out = bytearray([tokenizer.byte_decoder[c] for c in text]).decode('utf-8',
+#                                                                                           errors=tokenizer.errors)
+#                     dec_out = [dec_out]
+
+
+#                 dec_out = sent_tokenize(' '.join(dec_out))
+#                 ext = [sent.split(' ') for sent in dec_out]
+#                 ext_inds += [(len(ext_arts), len(ext))]
+#                 ext_arts += ext
+#             dec_outs = ext_arts
+
+#             assert i == batch_size * i_debug
+#             for j, n in ext_inds:
+#                 decoded_sents = [' '.join(dec) for dec in dec_outs[j:j + n]]
+#                 with open(join(save_path, 'output/{}.dec'.format(i)),
+#                           'w') as f:
+#                     f.write(make_html_safe('\n'.join(decoded_sents)))
+#                 i += 1
+#                 print('{}/{} ({:.2f}%) decoded in {} seconds\r'.format(
+#                     i, n_data, i / n_data * 100, timedelta(seconds=int(time() - start))
+#                 ), end='')
+#                 length += len(decoded_sents)
+#         print('average summary length:', length / i)
+
+def decodeGAT(save_path, abs_dir, split, batch_size, max_len, cuda, min_len):
     start = time()
     # setup model
     if abs_dir is None:
@@ -43,99 +135,7 @@ def decode(save_path, abs_dir, split, batch_size, max_len, cuda, min_len):
         raise Exception('abs directory none!')
     else:
         #abstractor = Abstractor(abs_dir, max_len, cuda)
-        abstractor = BeamAbstractor(abs_dir, max_len, cuda, min_len, reverse=args.reverse)
-
-    bert = abstractor._bert
-    if bert:
-        tokenizer = abstractor._tokenizer
-    if bert:
-        import logging
-        logging.basicConfig(level=logging.ERROR)
-
-    # if args.docgraph or args.paragraph:
-    #     abstractor = BeamAbstractorGAT(abs_dir, max_len, cuda, min_len, reverse=args.reverse)
-
-    # setup loader
-    def coll(batch):
-        articles = list(filter(bool, batch))
-        return articles
-    dataset = AbsDecodeDataset(split)
-
-    n_data = len(dataset)
-    loader = DataLoader(
-        dataset, batch_size=batch_size, shuffle=False, num_workers=4,
-        collate_fn=coll
-    )
-
-    os.makedirs(save_path)
-    # prepare save paths and logs
-    dec_log = {}
-    dec_log['abstractor'] = (None if abs_dir is None
-                             else json.load(open(join(abs_dir, 'meta.json'))))
-    dec_log['rl'] = False
-    dec_log['split'] = split
-    dec_log['beam'] = 5  # greedy decoding only
-    beam_size = 5
-    with open(join(save_path, 'log.json'), 'w') as f:
-        json.dump(dec_log, f, indent=4)
-    os.makedirs(join(save_path, 'output'))
-
-    # Decoding
-    i = 0
-    length = 0
-    with torch.no_grad():
-        for i_debug, raw_article_batch in enumerate(loader):
-            if bert:
-                tokenized_article_batch = map(tokenize_keepcase(args.max_input), raw_article_batch)
-            else:
-                tokenized_article_batch = map(tokenize(args.max_input), raw_article_batch)
-            ext_arts = []
-            ext_inds = []
-            beam_inds = []
-            pre_abs = list(tokenized_article_batch)
-            pre_abs = [article[0] for article in pre_abs]
-            for j in range(len(pre_abs)):
-                beam_inds += [(len(beam_inds), 1)]
-            all_beams = abstractor(pre_abs, beam_size, diverse=1.0)
-            dec_outs = rerank_mp(all_beams, beam_inds)
-
-            for dec_out in dec_outs:
-                if bert:
-                    text = ''.join(' '.join(dec_out).split(' '))
-                    dec_out = bytearray([tokenizer.byte_decoder[c] for c in text]).decode('utf-8',
-                                                                                          errors=tokenizer.errors)
-                    dec_out = [dec_out]
-
-
-                dec_out = sent_tokenize(' '.join(dec_out))
-                ext = [sent.split(' ') for sent in dec_out]
-                ext_inds += [(len(ext_arts), len(ext))]
-                ext_arts += ext
-            dec_outs = ext_arts
-
-            assert i == batch_size * i_debug
-            for j, n in ext_inds:
-                decoded_sents = [' '.join(dec) for dec in dec_outs[j:j + n]]
-                with open(join(save_path, 'output/{}.dec'.format(i)),
-                          'w') as f:
-                    f.write(make_html_safe('\n'.join(decoded_sents)))
-                i += 1
-                print('{}/{} ({:.2f}%) decoded in {} seconds\r'.format(
-                    i, n_data, i / n_data * 100, timedelta(seconds=int(time() - start))
-                ), end='')
-                length += len(decoded_sents)
-        print('average summary length:', length / i)
-
-def decodeGAT(save_path, abs_dir, split, batch_size, max_len, cuda, min_len, docgraph):
-    start = time()
-    # setup model
-    if abs_dir is None:
-        # NOTE: if no abstractor is provided then
-        #       the whole model would be extractive summarization
-        raise Exception('abs directory none!')
-    else:
-        #abstractor = Abstractor(abs_dir, max_len, cuda)
-        abstractor = BeamAbstractorGAT(abs_dir, max_len, cuda, min_len, reverse=args.reverse, docgraph=docgraph)
+        abstractor = BeamAbstractorGAT(abs_dir, max_len, cuda, min_len, reverse=args.reverse)
 
 
     bert = abstractor._bert
@@ -148,7 +148,7 @@ def decodeGAT(save_path, abs_dir, split, batch_size, max_len, cuda, min_len, doc
     def coll(batch):
         articles, nodes, edges, subgraphs, paras = list(filter(bool, list(zip(*batch))))
         return (articles, nodes, edges, subgraphs, paras)
-    dataset = AbsDecodeDatasetGAT(split, docgraph)
+    dataset = AbsDecodeDatasetGAT(split)
 
     n_data = len(dataset)
     loader = DataLoader(
@@ -282,8 +282,6 @@ if __name__ == '__main__':
     data.add_argument('--test', action='store_true', help='use test set')
 
     # decode options
-    parser.add_argument('--docgraph', action='store_true', help='if model contains gat encoder docgraph')
-    parser.add_argument('--paragraph', action='store_true', help='if model contains gat encoder paragraph')
     parser.add_argument('--max_input', type=int, default=1024, help='maximum input length')
     parser.add_argument('--batch', type=int, action='store', default=32,
                         help='batch size of faster decoding')
@@ -303,10 +301,5 @@ if __name__ == '__main__':
 
     data_split = 'test' if args.test else 'val'
     print(args)
-    if args.docgraph or args.paragraph:
-        assert not all([args.docgraph, args.paragraph])
-        decodeGAT(args.path, args.abs_dir,
-               data_split, args.batch, args.max_dec_word, args.cuda, args.min_dec_word, args.docgraph)
-    else:
-        decode(args.path, args.abs_dir,
-           data_split, args.batch, args.max_dec_word, args.cuda, args.min_dec_word)
+    decodeGAT(args.path, args.abs_dir,
+            data_split, args.batch, args.max_dec_word, args.cuda, args.min_dec_word)

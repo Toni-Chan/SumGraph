@@ -16,7 +16,7 @@ def read_raw(split,start, end):
             with open(os.path.join(OPENIE_DIR,   fname), 'r') as f:
                 for line in f:
                     data = line.strip().split('\t')
-                    data = [_.strip() for _ in data]
+                   d data = [_.strip() for _ in data]
                     try:
                         data_dict[data[0]][data[1]].append(data[2:])
                     except KeyError:

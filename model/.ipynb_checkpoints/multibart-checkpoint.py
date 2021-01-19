@@ -1216,7 +1216,7 @@ class multiBartGAT(PretrainedBartModel):
 
         lm_logits = F.linear(final_state, self.shared.weight,
                              bias=self.final_logits_bias)
-        lm_logits = F.softmax(lm_logits, dim=-1)
+        lm_logits = F.log_softmax(lm_logits, dim=-1)
         lm_logits = (lm_logits,)
         if 'soft' in self._mask_type:
             lm_logits += (masks,)
@@ -1513,136 +1513,175 @@ class multiBartGAT(PretrainedBartModel):
 
         return outputs, attns
 
-    # def batched_beamsearch(self, article, art_lens,
-    #                        extend_art, extend_vsize,
-    #                        ninfo, rinfo, ext_ninfo,
-    #                        go, eos, unk, max_len, beam_size, diverse=1.0, min_len=35):
-    #     (nodes, nmask, node_num, sw_mask, feature_dict, node_lists) = ninfo
-    #     (relations, rmask, triples, adjs) = rinfo
-    #     if self._copy_from_node:
-    #         (all_node_words, all_node_mask, ext_node_aligns, gold_copy_mask) = ext_ninfo
-    #     if self._gold:
-    #         sw_mask = sw_mask
-    #     else:
-    #         sw_mask = None
-    #     batch_size = len(art_lens)
-    #     vsize = self._embedding.num_embeddings
+    def batched_beamsearch(self, article, art_lens,
+                           extend_art, extend_vsize,
+                           ninfo, rinfo, ext_ninfo,
+                           go, eos, unk, max_len, beam_size, diverse=1.0, min_len=35):
+        (nodes, nmask, node_num, sw_mask, feature_dict) = ninfo
+        
+        (relations, rmask, triples, adjs) = rinfo
+        if self._gold:
+            sw_mask = sw_mask
+        else:
+            sw_mask = None
+        batch_size = len(art_lens)
+        vsize = self._embedding.num_embeddings
 
-    #     last_hidden,hidden_states,attention  = self.encoder(article)
+        return_dict = False
+        encoder_outputs = self.encoder(
+            input_ids=article,
+            return_dict=return_dict,
+            output_attentions=True,
+            output_hidden_states=True,
+        )
+        (last_hidden, hidden_states, attention,
+         article_embedding) = encoder_outputs
 
-    #     if self._mask_type == 'soft' or self._mask_type == 'none':
-    #         outputs = self._encode_graph(attention, nodes, nmask, relations,
-    #                                           rmask, adjs, node_lists, node_mask=None,
-    #                                           nodefreq=feature_dict['node_freq'])
-    #     else:
-    #         outputs = self._encode_graph(attention, nodes, nmask, relations, rmask, adjs, node_lists, sw_mask,
-    #                                    nodefreq=feature_dict['node_freq'])
-    #     if self._hierarchical_attn:
-    #         topics, masks, paras = outputs
-    #     elif 'soft' in self._mask_type:
-    #         topics, masks = outputs
-    #         nodes = topics[0]
-    #         node_num = topics[1]
-    #         paras = None
-    #     else:
-    #         topics = outputs
-    #         nodes = topics[0]
-    #         node_num = topics[1]
-    #         paras = None
-    #     ext_info = None
+        if self._mask_type == 'soft' or self._mask_type == 'none':
+            outputs = self._encode_graph(attention, nodes, nmask, relations,
+                                              rmask, adjs, node_lists, node_mask=None,
+                                              nodefreq=feature_dict['node_freq'])
+        else:
+            outputs = self._encode_graph(attention, nodes, nmask, relations, rmask, adjs, node_lists, sw_mask,
+                                       nodefreq=feature_dict['node_freq'])
+        if self._hierarchical_attn:
+            topics, masks, paras = outputs
+        elif 'soft' in self._mask_type:
+            topics, masks = outputs
+            nodes = topics[0]
+            node_num = topics[1]
+            paras = None
+        else:
+            topics = outputs
+            nodes = topics[0]
+            node_num = topics[1]
+            paras = None
+        ext_info = None
 
-    #     mask = len_mask(art_lens, attention.device).unsqueeze(-2)
+        topics_input = torch.cat([last_hidden, nodes], dim=1)
 
-    #     # graph_encoded = self.encoder(topics, attention_mask=masks)
-    #     # new_last_hidden = graph_encoded.last_hidden_state
-    #     # new_attention = graph_encoded.attentions
-    #     # new_hidden_states = graph_encoded.hidden_states
+        mask = len_mask(art_lens, attention.device).unsqueeze(-2)
 
-    #     ## decoding
-    #     # init values
+        # all_attention = (attention, mask, extend_art, extend_vsize)
+        # attention = all_attention
 
-    #     logits_processor = logits_processor if logits_processor is not None else LogitsProcessorList()
-    #     max_length = max_length if max_length is not None else self.config.max_length
-    #     pad_token_id = pad_token_id if pad_token_id is not None else self.config.pad_token_id
-    #     eos_token_id = eos_token_id if eos_token_id is not None else self.config.eos_token_id
+        all_beams = [bs.init_beam(go, None)
+                     for i in range(batch_size)]
+        if self._hierarchical_attn:
+            max_node_num = max(topics[1])
+        else:
+            max_node_num = max(node_num)
+        if self._hierarchical_attn:
+            all_nodes = [(topics[0][i, :, :], topics[1][i]) for i in range(len(topics[1]))]
+            all_paras = [(paras[0][i, :, :], paras[1][i], paras[2][i, :]) for i in range(len(paras[1]))]
+            max_subgraph_node_num = max(paras[1])
+        else:
+            if sw_mask is not None:
+                all_nodes = [(nodes[i, :, :], node_num[i], sw_mask[i, :]) for i in range(len(node_num))]
+            else:
+                all_nodes = [(nodes[i, :, :], node_num[i]) for i in range(len(node_num))]
 
-    #     batch_size = len(beam_scorer._beam_hyps)
-    #     num_beams = beam_scorer.num_beams
+        finished_beams = [[] for _ in range(batch_size)]
+        outputs = [None for _ in range(batch_size)]
+        
+        # beam process
+        for t in range(max_len):
+            toks = []
+            
+            # pack beams
+            for beam in filter(bool, all_beams):
+                token, _ = bs.pack_beam(beam, article.device)
+                toks.append(token)
+            token = torch.stack(toks, dim=1)
+            token.masked_fill_(token >= vsize, unk)
 
-    #     batch_beam_size, cur_len = input_ids.shape
-    #     assert (
-    #         num_beams * batch_size == batch_beam_size
-    #     ), "Batch dimension of `input_ids` should be {num_beams * batch_size}, but is {batch_beam_size}."
+            # filtered_nodes = torch.stack([all_nodes[i][0] for i, _beam in enumerate(all_beams) if _beam != []], dim=0)
+            # filtered_node_num = [all_nodes[i][1] for i, _beam in enumerate(all_beams) if _beam != []]
+            if sw_mask is not None:
+                filtered_sw_mask = torch.stack([all_nodes[i][2] for i, _beam in enumerate(all_beams) if _beam != []], dim=0)
+            else:
+                filtered_sw_mask = None
+            if self._hierarchical_attn:
+                filtered_paras = [torch.stack([all_paras[i][0] for i, _beam in enumerate(all_beams) if _beam != []], dim=0),
+                                  [all_paras[i][1] for i, _beam in enumerate(all_beams) if _beam != []],
+                                  torch.stack([all_paras[i][2] for i, _beam in enumerate(all_beams) if _beam != []],dim=0),
+                                  max_subgraph_node_num]
+            else:
+                filtered_paras = None
 
-    #     beam_scores = torch.zeros((batch_size, num_beams), dtype=torch.float, device=input_ids.device)
-    #     beam_scores[:, 1:] = -1e9
-    #     beam_scores = beam_scores.view((batch_size * num_beams,))
+            filtered_ext_info = None
+            if t < min_len:
+                force_not_stop = True
+            else:
+                force_not_stop = False
 
-    #     while cur_len < max_length:
-    #         decoder_outputs = self.decoder(
-    #             tok,
-    #             topics,
-    #             encoder_padding_mask=None,
-    #             decoder_padding_mask=None,
-    #             decoder_causal_mask=None,
-    #             use_cache=False
-    #             )
+            # send beam
 
-    #         new_last_hidden = decoder_outputs.last_hidden_state
-    #         logits = F.linear(new_last_hidden, self.shared.weight, bias=self.final_logits_bias)
-    #         attn_score = decoder_outputs.attention
+            # topk, lp, states, attn_score = self._decoder.topk_step(
+            #     token, states, attention, beam_size, filtered_nodes, filtered_node_num,
+            #     max_node_num=max_node_num, side_mask=filtered_sw_mask,  force_not_stop=force_not_stop, filtered_ext_info=filtered_ext_info, filtered_para_info=filtered_paras, eos=eos)
 
-    #         # also save log probability
-    #         logprob = F.log_softmax(logits, dim=1)
-    #         next_token_logits = outputs.logits[:, -1, :]
+            
+            decoder_outputs = self.decoder(
+                token,
+                topics_input,
+                encoder_padding_mask=None,
+                decoder_padding_mask=None, # Waht should this be?
+                decoder_causal_mask=None,
+                use_cache=False
+            )
 
-    #         # adjust tokens for Bart, *e.g.*
-    #         next_token_logits = self.adjust_logits_during_generation(
-    #             next_token_logits, cur_len=cur_len, max_length=max_length
-    #         )
+            final_state = decoder_outputs[0]
+            attn_score = decoder_outputs[-1][-1]
 
-    #         next_token_scores = F.log_softmax(next_token_logits, dim=-1)  # (batch_size * num_beams, vocab_size)
-
-    #         next_token_scores = logits_processor(input_ids, next_token_scores)
-    #         next_token_scores = next_token_scores + beam_scores[:, None].expand_as(next_token_scores)
-    #         # reshape for beam search
-    #         vocab_size = next_token_scores.shape[-1]
-    #         next_token_scores = next_token_scores.view(batch_size, num_beams * vocab_size)
-
-    #         next_token_scores, next_tokens = torch.topk(
-    #             next_token_scores, 2 * num_beams, dim=1, largest=True, sorted=True
-    #         )
-
-    #         next_indices = next_tokens // vocab_size
-    #         next_tokens = next_tokens % vocab_size
-
-    #         # stateless
-    #         beam_outputs = beam_scorer.process(
-    #             input_ids,
-    #             next_token_scores,
-    #             next_tokens,
-    #             next_indices,
-    #             pad_token_id=pad_token_id,
-    #             eos_token_id=eos_token_id,
-    #         )
-    #         beam_scores = beam_outputs["next_beam_scores"]
-    #         beam_next_tokens = beam_outputs["next_beam_tokens"]
-    #         beam_idx = beam_outputs["next_beam_indices"]
-
-    #         input_ids = torch.cat([input_ids[beam_idx, :], beam_next_tokens.unsqueeze(-1)], dim=-1)
-    #         cur_len = cur_len + 1
-
-    #         model_kwargs = self._update_model_kwargs_for_generation(
-    #             outputs, model_kwargs, is_encoder_decoder=self.config.is_encoder_decoder
-    #         )
-    #         if model_kwargs["past"] is not None:
-    #             model_kwargs["past"] = self._reorder_cache(model_kwargs["past"], beam_idx)
-
-    #         if beam_scorer.is_done:
-    #             break
-
-    #     decoded = beam_scorer.finalize(
-    #         input_ids, beam_scores, next_tokens, next_indices, pad_token_id=pad_token_id, eos_token_id=eos_token_id
-    #     )
-
-    #     return decoded
+            lm_logits = F.linear(final_state, self.shared.weight,
+                                bias=self.final_logits_bias)
+            lm_logits = F.softmax(lm_logits, dim=-1).condiguous.view(beam_size, batch_size, -1)
+            
+            lp, topk = lm_logits.topk(k=beam_size, dim=-1)
+            
+            
+            batch_i = 0
+            for i, (beam, finished) in enumerate(zip(all_beams,
+                                                     finished_beams)):
+                if not beam:
+                    continue
+                finished, new_beam = bs.next_search_beam(
+                    beam, beam_size, finished, eos,
+                    topk[:, batch_i, :], lp[:, batch_i, :],
+                    None,
+                    None,
+                    diverse
+                )
+                batch_i += 1
+                if len(finished) >= beam_size:
+                    all_beams[i] = []
+                    outputs[i] = finished[:beam_size]
+                    # exclude finished inputs
+                    (attention, mask, extend_art, extend_vsize
+                    ) = all_attention
+                    masks = [mask[j] for j, o in enumerate(outputs)
+                             if o is None]
+                    ind = [j for j, o in enumerate(outputs) if o is None]
+                    ind = torch.LongTensor(ind).to(attention.device)
+                    attention, extend_art = map(
+                        lambda v: v.index_select(dim=0, index=ind),
+                        [attention, extend_art]
+                    )
+                    if masks:
+                        mask = torch.stack(masks, dim=0)
+                    else:
+                        mask = None
+                    attention = (
+                        attention, mask, extend_art, extend_vsize)
+                else:
+                    all_beams[i] = new_beam
+                    finished_beams[i] = finished
+            if all(outputs):
+                break
+        else:
+            for i, (o, f, b) in enumerate(zip(outputs,
+                                              finished_beams, all_beams)):
+                if o is None:
+                    outputs[i] = (f+b)[:beam_size]
+        return outputs
