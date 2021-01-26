@@ -200,7 +200,7 @@ def configure_training(opt, lr, clip_grad, lr_decay, batch_size, bart):
     return criterion, train_params
 
 
-def configure_training_multitask(opt, lr, clip_grad, lr_decay, batch_size, mask_type, bart):
+def configure_training_multitask(opt, lr, clip_grad, lr_decay, batch_size, mask_type, bart,use_kg=False):
     """ supports Adam optimizer only"""
     assert opt in ['adam', 'adagrad']
     opt_kwargs = {}
@@ -221,7 +221,9 @@ def configure_training_multitask(opt, lr, clip_grad, lr_decay, batch_size, mask_
 
     def bce(logit, target): return F.binary_cross_entropy(
         logit, target, reduce=False)
-
+    def criterion1(logits1,  targets1,logits2):
+#         print(logits1.size(),logits2.size(), targets1.size())
+        return (sequence_loss(logits1, targets1, nll, pad_idx=PAD).mean(), None)
     def criterion(logits1, logits2, targets1, targets2):
         aux_loss = None
         for logit in logits2:
@@ -234,7 +236,10 @@ def configure_training_multitask(opt, lr, clip_grad, lr_decay, batch_size, mask_
                                           pad_idx=-1, if_aux=True, fp16=False).mean()
         return (sequence_loss(logits1, targets1, nll, pad_idx=PAD).mean(), aux_loss)
     print('pad id:', PAD)
-    return criterion, train_params
+    
+    if use_kg == True:
+        return criterion, train_params
+    return criterion1, train_params
 
 
 def build_batchers_bart(cuda, debug, bart_model):

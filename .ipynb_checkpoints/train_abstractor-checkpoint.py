@@ -2,7 +2,8 @@
 # public models
 import argparse
 import json
-import os, re
+import os
+import re
 from os.path import join, exists
 import pickle as pkl
 
@@ -12,6 +13,7 @@ from torch import optim
 from torch.nn import functional as F
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
+from torch.nn.parallel import DistributedDataParallel
 
 # training pipeline. no need to change
 from training import get_basic_grad_fn, basic_validate
@@ -32,8 +34,13 @@ from training import multitask_validate
 
 from utils import PAD, UNK, START, END
 from utils import make_vocab, make_embedding
+from utils import init_gpu_params
 from transformers import BartTokenizer, BartConfig
 import pickle
+
+import logging
+logging.basicConfig(level=logging.ERROR)
+logger = logging.getLogger(__name__)
 
 # NOTE: bucket size too large may sacrifice randomness,
 #       to low may increase # of PAD tokens
@@ -44,10 +51,12 @@ try:
 except KeyError:
     print('please use environment variable to specify data directories')
 
+
 class MatchDataset(CnnDmDataset):
     """ single article sentence -> single abstract sentence
     (dataset created by greedily matching ROUGE)
     """
+
     def __init__(self, split):
         super().__init__(split, DATA_DIR)
 
@@ -59,10 +68,12 @@ class MatchDataset(CnnDmDataset):
         matched_arts = [art_sents[i] for i in extracts]
         return matched_arts, abs_sents[:len(extracts)]
 
+
 class SumDataset(CnnDmDataset):
     """ single article sentence -> single abstract sentence
     (dataset created by greedily matching ROUGE)
     """
+
     def __init__(self, split):
         super().__init__(split, DATA_DIR)
 
@@ -74,10 +85,12 @@ class SumDataset(CnnDmDataset):
         abs_sents = [' '.join(abs_sents)]
         return art_sents, abs_sents
 
+
 class MatchDataset_all2all(CnnDmDataset):
     """ single article sentence -> single abstract sentence
     (dataset created by greedily matching ROUGE)
     """
+
     def __init__(self, split):
         super().__init__(split, DATA_DIR)
 
@@ -89,10 +102,12 @@ class MatchDataset_all2all(CnnDmDataset):
         abs_sents = [' '.join(abs_sents)]
         return matched_arts, abs_sents
 
+
 class MatchDataset_graph(CnnDmDataset):
     """ single article sentence -> single abstract sentence
     (dataset created by greedily matching ROUGE)
     """
+
     def __init__(self, split, key='nodes_pruned2', subgraph=False):
         super().__init__(split, DATA_DIR)
         self.node_key = key
@@ -101,41 +116,48 @@ class MatchDataset_graph(CnnDmDataset):
 
     def __getitem__(self, i):
         js_data = super().__getitem__(i)
-        art_sents, abs_sents, nodes, edges, subgraphs, paras = (
-            js_data['article'], js_data['abstract'], js_data[self.node_key], js_data[self.edge_key], js_data['subgraphs'], js_data['paragraph_merged'])
-#         art_sents = [' '.join(art_sents)]
+        if self.subgraph:
+            art_sents, abs_sents, nodes, edges, subgraphs, paras = (
+                js_data['article'], js_data['abstract'], js_data[self.node_key], js_data[self.edge_key], js_data['subgraphs'], js_data['paragraph_merged'])
+        else:
+            art_sents, abs_sents, nodes, edges, subgraphs, paras = (
+                js_data['article'], js_data['abstract'], js_data[self.node_key], js_data[self.edge_key], None, None)
+            art_sents = [' '.join(art_sents)]
+
         abs_sents = [' '.join(abs_sents)]
         return art_sents, abs_sents, nodes, edges, subgraphs, paras
+
 
 def get_bart_align_dict(filename='preprocessing/bartalign-base.pkl'):
     with open(filename, 'rb') as f:
         bart_dict = pickle.load(f)
     return bart_dict
 
+
 def configure_bart_gat(vocab_size, emb_dim, n_encoder, n_decoder, drop_encoder, drop_decoder,
-                  load_from=None, gat_args={}, max_art=2048,
-                  static_pos_emb=False):
-    
+                       load_from=None, gat_args={}, max_art=2048,
+                       static_pos_emb=False):
+
     net_args = BartConfig.from_pretrained('facebook/bart-base')
-#     (
-#         vocab_size=vocab_size,
-#         d_model=emb_dim,
-#         encoder_layers=n_encoder,
-#         decoder_layers=n_decoder,
-#         encoder_layerdrop=drop_encoder,
-#         decoder_layerdrop=drop_decoder,
-#         static_position_embedding=static_pos_emb,
-#         max_position_embeddings=max_art,
-#     )
-    
-    net = multiBartGAT.from_pretrained('facebook/bart-base',model_args=gat_args)
-    
+    #     (
+    #         vocab_size=vocab_size,
+    #         d_model=emb_dim,
+    #         encoder_layers=n_encoder,
+    #         decoder_layers=n_decoder,
+    #         encoder_layerdrop=drop_encoder,
+    #         decoder_layerdrop=drop_decoder,
+    #         static_position_embedding=static_pos_emb,
+    #         max_position_embeddings=max_art,
+    #     )
+
+    net = multiBartGAT.from_pretrained(
+        'facebook/bart-base', model_args=gat_args)
+
     if load_from is not None:
         abs_ckpt = load_best_ckpt(load_from)
         net.load_state_dict(abs_ckpt)
 
     return net, net_args, gat_args
-
 
 
 def load_best_ckpt(model_dir, reverse=False):
@@ -150,6 +172,7 @@ def load_best_ckpt(model_dir, reverse=False):
     )['state_dict']
     return ckpt
 
+
 def configure_training(opt, lr, clip_grad, lr_decay, batch_size, bart):
     """ supports Adam optimizer only"""
     assert opt in ['adam', 'adagrad']
@@ -159,22 +182,25 @@ def configure_training(opt, lr, clip_grad, lr_decay, batch_size, bart):
     train_params = {}
     if opt == 'adagrad':
         opt_kwargs['initial_accumulator_value'] = 0.1
-    train_params['optimizer']      = (opt, opt_kwargs)
+    train_params['optimizer'] = (opt, opt_kwargs)
     train_params['clip_grad_norm'] = clip_grad
-    train_params['batch_size']     = batch_size
-    train_params['lr_decay']       = lr_decay
+    train_params['batch_size'] = batch_size
+    train_params['lr_decay'] = lr_decay
     if bart:
         PAD = 1
     else:
         PAD = 0
-    nll = lambda logit, target: F.nll_loss(logit, target, reduce=False)
+
+    def nll(logit, target): return F.nll_loss(logit, target, reduce=False)
+
     def criterion(logits, targets):
         return sequence_loss(logits, targets, nll, pad_idx=PAD)
 
     print('pad id:', PAD)
     return criterion, train_params
 
-def configure_training_multitask(opt, lr, clip_grad, lr_decay, batch_size, mask_type, bart):
+
+def configure_training_multitask(opt, lr, clip_grad, lr_decay, batch_size, mask_type, bart,use_kg=False):
     """ supports Adam optimizer only"""
     assert opt in ['adam', 'adagrad']
     opt_kwargs = {}
@@ -183,33 +209,44 @@ def configure_training_multitask(opt, lr, clip_grad, lr_decay, batch_size, mask_
     train_params = {}
     if opt == 'adagrad':
         opt_kwargs['initial_accumulator_value'] = 0.1
-    train_params['optimizer']      = (opt, opt_kwargs)
+    train_params['optimizer'] = (opt, opt_kwargs)
     train_params['clip_grad_norm'] = clip_grad
-    train_params['batch_size']     = batch_size
-    train_params['lr_decay']       = lr_decay
+    train_params['batch_size'] = batch_size
+    train_params['lr_decay'] = lr_decay
 
     if bart:
         PAD = 1
-    nll = lambda logit, target: F.nll_loss(logit, target, reduce=False)
 
-    bce = lambda logit, target: F.binary_cross_entropy(logit, target, reduce=False)
+    def nll(logit, target): return F.nll_loss(logit, target, reduce=False)
+
+    def bce(logit, target): return F.binary_cross_entropy(
+        logit, target, reduce=False)
+    def criterion1(logits1,  targets1,logits2):
+#         print(logits1.size(),logits2.size(), targets1.size())
+        return (sequence_loss(logits1, targets1, nll, pad_idx=PAD).mean(), None)
     def criterion(logits1, logits2, targets1, targets2):
         aux_loss = None
         for logit in logits2:
             if aux_loss is None:
-                assert logit.size()==targets2.size()
-                aux_loss = sequence_loss(logit, targets2, bce, pad_idx=-1, if_aux=True, fp16=False).mean()
+                assert logit.size() == targets2.size()
+                aux_loss = sequence_loss(
+                    logit, targets2, bce, pad_idx=-1, if_aux=True, fp16=False).mean()
             else:
-                aux_loss += sequence_loss(logit, targets2, bce, pad_idx=-1, if_aux=True, fp16=False).mean()
+                aux_loss += sequence_loss(logit, targets2, bce,
+                                          pad_idx=-1, if_aux=True, fp16=False).mean()
         return (sequence_loss(logits1, targets1, nll, pad_idx=PAD).mean(), aux_loss)
     print('pad id:', PAD)
-    return criterion, train_params
+    
+    if use_kg == True:
+        return criterion, train_params
+    return criterion1, train_params
 
 
 def build_batchers_bart(cuda, debug, bart_model):
     tokenizer = BartTokenizer.from_pretrained(bart_model)
     #tokenizer = BertTokenizer.from_pretrained(bart_model)
     prepro = prepro_fn_copy_bart(tokenizer, args.max_art, args.max_abs)
+
     def sort_key(sample):
         src, target = sample[0], sample[1]
         return (len(target), len(src))
@@ -232,33 +269,35 @@ def build_batchers_bart(cuda, debug, bart_model):
         collate_fn=coll_fn
     )
     val_batcher = BucketedGenerater(val_loader, prepro, sort_key, batchify,
-                                        single_run=True, fork=not debug)
+                                    single_run=True, fork=not debug)
 
     return train_batcher, val_batcher, tokenizer.encoder
 
+
 def build_batchers_gat_bart(cuda, debug, gold_key, adj_type,
-                       mask_type, num_worker=4, bart_model='bart-base'):
+                            mask_type, num_worker=4, bart_model='bart-base', docgraph=False):
     print('adj_type:', adj_type)
     print('mask_type:', mask_type)
-    subgraph = True
-    docgraph = not subgraph
+    subgraph = not docgraph
     tokenizer = BartTokenizer.from_pretrained(bart_model)
 
     with open(os.path.join(DATA_DIR, 'roberta-base-align.pkl'), 'rb') as f:
         align = pickle.load(f)
 
-    prepro = prepro_fn_gat_bart(tokenizer, align, args.max_art, args.max_abs, key=gold_key, adj_type=adj_type, docgraph=docgraph)
-    key = 'nodes'
+    prepro = prepro_fn_gat_bart(tokenizer, align, args.max_art,
+                                args.max_abs, key=gold_key, adj_type=adj_type, docgraph=docgraph)
+    key = 'nodes' if subgraph else 'nodes_pruned2'
     _coll_fn = coll_fn_gat(max_node_num=400)
+
     def sort_key(sample):
         src, target = sample[0], sample[1]
         return (len(target), len(src))
 
     batchify = compose(
-            batchify_fn_gat_bart(tokenizer, cuda=cuda,
-                         adj_type=adj_type, mask_type=mask_type, docgraph=docgraph),
-            convert_batch_gat_bart(tokenizer, args.max_art)
-        )
+        batchify_fn_gat_bart(tokenizer, cuda=cuda,
+                             adj_type=adj_type, mask_type=mask_type, docgraph=docgraph),
+        convert_batch_gat_bart(tokenizer, args.max_art)
+    )
 
     train_loader = DataLoader(
         MatchDataset_graph('train', key=key, subgraph=subgraph), batch_size=BUCKET_SIZE,
@@ -278,18 +317,23 @@ def build_batchers_gat_bart(cuda, debug, gold_key, adj_type,
 
     return train_batcher, val_batcher, tokenizer.encoder
 
+
 def main(args):
-    import logging
-    logging.basicConfig(level=logging.ERROR)
-    args.gat=True
-    args.bart=True
+
+    args.gat = True
+    args.bart = True
+    # multi_gpu_settings
+    init_gpu_params(args)
+
     # create data batcher, vocabulary
 
     # batcher
     train_batcher, val_batcher, word2id = build_batchers_gat_bart(
-                                                            args.cuda, args.debug, args.gold_key, args.adj_type,
-                                                            args.mask_type,
-                                                            num_worker=args.num_worker, bart_model=args.bartmodel)
+        args.cuda, args.debug, args.gold_key, args.adj_type,
+        args.mask_type,
+        num_worker=args.num_worker, bart_model=args.bartmodel,
+        docgraph=args.docgraph
+    )
 
     # make net
     _args = {}
@@ -301,21 +345,32 @@ def main(args):
     _args['adj_type'] = args.adj_type
     _args['mask_type'] = args.mask_type
     _args['node_freq'] = args.node_freq
+    _args['docgraph'] = args.docgraph
 
-    net, net_args, gat_args = configure_bart_gat(args.vsize, args.emb_dim, args.n_encoder, args.n_decoder, 
-                                      args.drop_encoder, args.drop_decoder, args.load_from, _args, 
-                                      args.max_art, args.static_pos_emb)
+    training_group = []
+
+    net, net_args, gat_args = configure_bart_gat(args.vsize, args.emb_dim, args.n_encoder, args.n_decoder,
+                                                 args.drop_encoder, args.drop_decoder, args.load_from, _args,
+                                                 args.max_art, args.static_pos_emb)
 
     # configure training setting
     if 'soft' in args.mask_type and args.gat:
         criterion, train_params = configure_training_multitask(
             'adam', args.lr, args.clip, args.decay, args.batch, args.mask_type,
-            args.bart
+            args.bart,
         )
     else:
         criterion, train_params = configure_training(
-        'adam', args.lr, args.clip, args.decay, args.batch, args.bart
+            'adam', args.lr, args.clip, args.decay, args.batch, args.bart
         )
+
+    # do we need to change criterion?
+
+    if args.cuda:
+        net = net.cuda()
+        if args.multi_gpu:
+            net = DistributedDataParallel(
+                net, device_ids=[i for i in range(args.n_gpu)])
 
     # save experiment setting
     if not exists(args.path):
@@ -323,25 +378,20 @@ def main(args):
     with open(join(args.path, 'vocab.pkl'), 'wb') as f:
         pkl.dump(word2id, f, pkl.HIGHEST_PROTOCOL)
     meta = {}
-    meta['net']           = 'base_abstractor'
-    meta['net_args']      = net_args
+    meta['net'] = 'base_abstractor'
+    meta['net_args'] = net_args
     meta['traing_params'] = train_params
     with open(join(args.path, 'meta.json'), 'wb') as f:
-        pickle.dump(meta,f)
-#     with open(join(args.path, 'meta.json'), 'w') as f:
-#         json.dump(meta, f, indent=4)
-
-    # prepare trainer
-    if args.cuda:
-        net = net.cuda()
-
+        pickle.dump(meta, f)
+    #     with open(join(args.path, 'meta.json'), 'w') as f:
+    #         json.dump(meta, f, indent=4)
 
     if 'soft' in args.mask_type and args.gat:
         val_fn = multitask_validate(net, criterion)
     else:
         val_fn = basic_validate(net, criterion)
     grad_fn = get_basic_grad_fn(net, args.clip)
-#     print(net._embedding.weight.requires_grad)
+    #     print(net._embedding.weight.requires_grad)
 
     optimizer = optim.AdamW(net.parameters(), **train_params['optimizer'][1])
     #optimizer = optim.Adagrad(net.parameters(), **train_params['optimizer'][1])
@@ -358,10 +408,10 @@ def main(args):
 
     if 'soft' in args.mask_type and args.gat:
         pipeline = MultiTaskPipeline(meta['net'], net,
-                                 train_batcher, val_batcher, args.batch, val_fn,
-                                 criterion, optimizer, grad_fn)
+                                     train_batcher, val_batcher, args.batch, val_fn,
+                                     criterion, optimizer, grad_fn)
         trainer = MultiTaskTrainer(pipeline, args.path,
-                               args.ckpt_freq, args.patience, scheduler)
+                                   args.ckpt_freq, args.patience, scheduler)
     else:
         pipeline = BasicPipeline(meta['net'], net,
                                  train_batcher, val_batcher, args.batch, val_fn,
@@ -369,49 +419,48 @@ def main(args):
         trainer = BasicTrainer(pipeline, args.path,
                                args.ckpt_freq, args.patience, scheduler)
 
-
     print('start training with the following hyper-parameters:')
     print(meta)
     trainer.train()
 
 
 if __name__ == '__main__':
-#     torch.cuda.set_device(0)
+    #     torch.cuda.set_device(0)
     parser = argparse.ArgumentParser(
         description='training of the abstractor (ML)'
     )
     # Basics
     parser.add_argument('--path', required=True, help='root of the model')
-    
+
     # parser.add_argument('--key', type=str, default='extracted_combine', help='constructed sentences')
     # Settings that align with BART
     parser.add_argument('--vsize', type=int, action='store', default=50265,
-                        help='vocabulary size') # BartConfig.vocab_size
+                        help='vocabulary size')  # BartConfig.vocab_size
     parser.add_argument('--emb_dim', type=int, action='store', default=768,
-                        help='the dimension of word embedding') # BartConfig.d_model
+                        help='the dimension of word embedding')  # BartConfig.d_model
     parser.add_argument('--n_encoder', type=int, action='store', default=6,
-                        help='number of encoder layer') # BartConfig.encoder_layers
+                        help='number of encoder layer')  # BartConfig.encoder_layers
     parser.add_argument('--n_decoder', type=int, action='store', default=6,
-                        help='number of decoder layer') # BartConfig.decoder_layers
+                        help='number of decoder layer')  # BartConfig.decoder_layers
     parser.add_argument('--drop_encoder', type=int, action='store', default=0.0,
-                        help='dropout rate of encoder between layers') # BartConfig.decoder_layerdrop
+                        help='dropout rate of encoder between layers')  # BartConfig.decoder_layerdrop
     parser.add_argument('--drop_decoder', type=int, action='store', default=0.0,
-                        help='dropout rate of decoder between layers') # BartConfig.decoder_layerdrop
+                        help='dropout rate of decoder between layers')  # BartConfig.decoder_layerdrop
     parser.add_argument('--max_art', type=int, action='store', default=1024,
-                        help='maximun words in a single article sentence') # BartConfig.max_position_embeddings
+                        help='maximun words in a single article sentence')  # BartConfig.max_position_embeddings
     parser.add_argument('--max_abs', type=int, action='store', default=256,
-                        help='maximun words in a single abstract sentence') # BartConfig.max_position_embeddings
+                        help='maximun words in a single abstract sentence')  # BartConfig.max_position_embeddings
     parser.add_argument('--static_pos_emb', type=int, action='store', default=False,
-                        help='use of sinosuidal position embeddings or learned ones') # BartConfig.static_position_embeddings
-    
-    ## Can add other settings based on BartConfig class if needed
+                        help='use of sinosuidal position embeddings or learned ones')  # BartConfig.static_position_embeddings
+
+    # Can add other settings based on BartConfig class if needed
 
     # GAT Configs
     parser.add_argument('--n_hidden', type=int, action='store', default=768,
                         help='the number of hidden units')
     parser.add_argument('--adj_type', action='store', default='edge_as_node', type=str,
                         help='concat_triple, edge_up, edge_down, no_edge, edge_as_node')
-    
+
     parser.add_argument('--mask_type', action='store', default='soft', type=str,
                         help='none, encoder, soft')
     parser.add_argument('--node_freq', action='store_true', default=False)
@@ -419,7 +468,6 @@ if __name__ == '__main__':
     # data preprocessing
     parser.add_argument('--gold_key', action='store', default='summary_worthy', type=str,
                         help='attention type')
-
 
     # training options
     parser.add_argument('--lr', type=float, action='store', default=1e-3,
@@ -447,18 +495,28 @@ if __name__ == '__main__':
                         help='disable GPU training')
     parser.add_argument('--load_from', type=str, default=None,
                         help='loading from file')
-    parser.add_argument('--gpu_id', type=int, default=0, help='gpu id if only 1 gpu is used')
+    parser.add_argument('--gpu_id', type=int, default=0,
+                        help='gpu id if only 1 gpu is used')
     parser.add_argument('--bartmodel', action='store', default='facebook/bart-base', type=str,
                         help='model type')
-    
+
+    parser.add_argument('--multi_gpu', action='store_true',
+                        help='multi-gpu training')
+    parser.add_argument('--n_gpu', type=int, default=1, help='number of gpus')
+    parser.add_argument("--local_rank", type=int, default=-1,
+                        help="Distributed training - Local rank")
+
+    parser.add_argument("--docgraph", action='store_true',
+                        default=False, help='if no subgraph is available')
+
     args = parser.parse_args()
     if args.debug:
         BUCKET_SIZE = 64
     args.topic_flow_model = False
     args.cuda = torch.cuda.is_available() and not args.no_cuda
-    if args.cuda:
+    if args.cuda and args.n_gpu == 1:
         torch.cuda.set_device(args.gpu_id)
 
-    args.n_gpu = 1
+    assert not (args.multi_gpu and args.n_gpu == 1)
 
     main(args)

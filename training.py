@@ -850,12 +850,15 @@ class MultiTaskPipeline(object):
         # backward and update ( and optional gradient monitoring )
         losses = self._criterion(*loss_args)
         loss = losses[0]
+        
         for _loss in losses[1:]:
-            loss += self._aux_w * _loss
+            if _loss is not None:
+                loss += self._aux_w * _loss
 
         loss.backward()
         log_dict['loss'] = losses[0].item()
-        log_dict['aux_loss'] = losses[1].item()
+        if losses[1] is not None:
+            log_dict['aux_loss'] = losses[1].item()
 
         if self._grad_fn is not None:
             log_dict.update(self._grad_fn())

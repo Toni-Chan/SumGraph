@@ -279,6 +279,8 @@ class BasicPipeline(object):
         fw_args, bw_args = next(self._batches)
         net_out = self._net(*fw_args)
 
+        
+
         # get logs and output for logging, backward
         log_dict = {}
         loss_args = self.get_loss_args(net_out, bw_args)
@@ -753,6 +755,8 @@ class MultiTaskTrainer(object):
         return val_metric
 
     def checkpoint(self):
+        self._pipeline.checkpoint(
+            join(self._save_dir, 'ckpt'))
         val_metric = self.validate()
         self._pipeline.checkpoint(
             join(self._save_dir, 'ckpt'), self._step, val_metric)
@@ -841,15 +845,20 @@ class MultiTaskPipeline(object):
         log_dict = {}
         loss_args = self.get_loss_args(net_out, bw_args)
 
+        
+
         # backward and update ( and optional gradient monitoring )
         losses = self._criterion(*loss_args)
         loss = losses[0]
+        
         for _loss in losses[1:]:
-            loss += self._aux_w * _loss
+            if _loss is not None:
+                loss += self._aux_w * _loss
 
         loss.backward()
         log_dict['loss'] = losses[0].item()
-        log_dict['aux_loss'] = losses[1].item()
+        if losses[1] is not None:
+            log_dict['aux_loss'] = losses[1].item()
 
         if self._grad_fn is not None:
             log_dict.update(self._grad_fn())
@@ -861,14 +870,16 @@ class MultiTaskPipeline(object):
 
     def validate(self):
         return self._val_fn(self._val_batcher(self._batch_size))
-
-    def checkpoint(self, save_path, step, val_metric=None):
+    
+    def checkpoint(self, save_path, step=None, val_metric=None):
         save_dict = {}
         if val_metric is not None and len(val_metric) == 2:
             name = 'ckpt-{:6f}-{:3f}-{}'.format(val_metric[0], val_metric[1], step)
             save_dict['val_metric'] = val_metric
-        else:
+        elif step is not None:
             name = 'ckpt-{}'.format(step)
+        else:
+            name = 'ckpt-backup'
 
         save_dict['state_dict'] = self._net.state_dict()
         save_dict['optimizer'] = self._opt.state_dict()
