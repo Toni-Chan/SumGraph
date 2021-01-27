@@ -70,9 +70,13 @@ def multitask_val_step(loss_step, fw_args, loss_args):
     losses = loss_step(fw_args, loss_args)
     try:
         n_data = losses[0].size(0)
+        if losses[1] is None:
+            return n_data, losses[0].sum().item(), 0
         return n_data, losses[0].sum().item(), losses[1].sum().item()
     except IndexError:
         n_data = 1
+        if losses[1] is None:
+            return n_data, losses[0].sum().item(), 0
         return n_data, losses[0].item(), losses[1].item()
 
 @curry

@@ -2,7 +2,7 @@ transformers-master
 
 checkpoints*
 SumGraph
-checkpoints
+checkpoint	
 model/bak
 *.ckpt 
 *.pyc
